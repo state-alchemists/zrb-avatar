@@ -1,14 +1,43 @@
-# Push a tag like 0.1.0: publishes the Python package to PyPI and attaches the desktop
-# app for Windows, macOS and Linux to a GitHub release.
-# PyPI publishing uses trusted publishing: add this repo and workflow (environment "pypi")
-# as a trusted publisher of the zrb-face project on pypi.org first.
+# Push a tag like 0.1.1: opens a GitHub release, publishes the Python package to PyPI, and
+# attaches the desktop app for Windows, macOS and Linux to that release.
+#
+# The release is created first and the two artifacts attach to it afterwards, so neither has
+# to wait for the other: a PyPI problem (a trusted publisher that has not been added yet)
+# must not cost you the desktop app, and a packaging problem must not hold back the package.
+#
+# PyPI publishing uses trusted publishing: add this repository, the workflow `release.yml`
+# and the environment `pypi` as a trusted publisher of the zrb-avatar project on pypi.org.
+# Without it, publish the version by hand (`python -m build && twine upload dist/*`) before
+# tagging: the publish step below notices the version is already there and skips itself, so
+# the tag still produces a green release with the app zips on it.
 name: release
 on:
   push:
     tags: ["[0-9]*"]
 
 jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # A tag that disagrees with the package would publish one version under another's name.
+      - name: The tag must be the version in pyproject.toml
+        run: |
+          version=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          if [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match pyproject.toml's $version"
+            exit 1
+          fi
+
+      - run: gh release create "$GITHUB_REF_NAME" --generate-notes --title "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   python:
+    needs: release
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -20,13 +49,27 @@ jobs:
         with:
           python-version: "3.12"
       - run: pipx run build
-      - uses: pypa/gh-action-pypi-publish@release/v1
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
+
+      # A release has to be safe to re-run: a version that is already on PyPI is not an error.
+      - name: Is this version already on PyPI?
+        id: published
+        run: |
+          if curl -fsS "https://pypi.org/pypi/zrb-avatar/$GITHUB_REF_NAME/json" > /dev/null; then
+            echo "yes=true" >> "$GITHUB_OUTPUT"
+            echo "$GITHUB_REF_NAME is already on PyPI; attaching the build to the release instead"
+          else
+            echo "yes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.published.outputs.yes == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
   app:
-    needs: python
+    needs: release
     strategy:
       matrix:
         include:
@@ -52,7 +95,7 @@ jobs:
           for dir in */; do
             name="${dir%/}"
             if [ "${{ matrix.pack }}" = mac ]; then
-              ditto -c -k --keepParent "$name/zrb-face.app" "$name.zip"  # keeps the app's symlinks
+              ditto -c -k --keepParent "$name/zrb-avatar.app" "$name.zip"  # keeps the app's symlinks
             else
               7z a -r "$name.zip" "./$name/*" > /dev/null
             fi

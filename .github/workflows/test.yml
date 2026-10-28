@@ -23,8 +23,8 @@ jobs:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         include:
           # The server watches the media player per platform (WSL/Windows, playerctl,
-          # media-control/AppleScript) and zrb-face opens a different app on each, so
-          # one interpreter each checks the suite still runs there.
+          # media-control/AppleScript) and the desktop app is packaged differently on
+          # each, so one interpreter each checks the suite still runs there.
           - os: windows-latest
             python-version: "3.13"
           - os: macos-latest
@@ -45,7 +45,7 @@ jobs:
 
       - name: Lint
         # Pyflakes-class checks only (unused imports and variables, undefined names), as zrb does.
-        run: flake8 --select=F zrb_face test_face.py zrb_init.py
+        run: flake8 --select=F zrb_avatar test_face.py zrb_init.py
 
       - name: Test
         # Also regenerates every clip in memory and fails if a shipped .vrma is stale.

@@ -10,7 +10,7 @@ pipx install zrb-avatar          # or: pip install zrb-avatar, next to zrb; from
 # once, e.g. in ~/.zshrc: load the zrb side into every zrb chat
 export ZRB_INIT_SCRIPTS="$ZRB_INIT_SCRIPTS:$(zrb-avatar init-path)"
 
-mkdir -p ~/.config/zrb-avatar/models && cp my.vrm ~/.config/zrb-avatar/models/   # a model: see Changing the model
+mkdir -p ~/.zrb/avatar/models && cp my.vrm ~/.zrb/avatar/models/   # a model: see Changing the model
 zrb-avatar my                    # (re)start the server, open a window with my.vrm
 zrb chat
 ```
@@ -149,7 +149,7 @@ The zrb-side names follow zrb's `CFG.ENV_PREFIX` (`ZRB` by default). The server 
 | `ZRB_AVATAR_URL` | `http://127.0.0.1:7777/event` | `client.py` | Where zrb sends events. |
 | `ZRB_AVATAR_HOST` | `127.0.0.1` | server | The address the server listens on. |
 | `ZRB_AVATAR_PORT` | `7777` | server, `zrb-avatar` | The server's port (change `ZRB_AVATAR_URL` to match). |
-| `ZRB_AVATAR_HOME` | `~/.config/zrb-avatar` | server, `zrb_init.py` | Your folder: models in `models/`, animations in `anim/`, and her own answers — `autonomy.json` (what she agreed to do unasked), `model` (the model she last chose, so a restart does not put the folder's first name back) and `nudge.json` (today's nudges, so a restart does not repeat them). |
+| `ZRB_AVATAR_HOME` | `~/.zrb/avatar` | server, `zrb_init.py` | Your folder: models in `models/`, animations in `anim/`, and her own answers — `autonomy.json` (what she agreed to do unasked), `model` (the model she last chose, so a restart does not put the folder's first name back) and `nudge.json` (today's nudges, so a restart does not repeat them). |
 | `ZRB_AVATAR_MODELS` | empty | server | More model folders, searched before `<home>/models`; separated by `:` (`;` on Windows). `~` is expanded. |
 | `ZRB_AVATAR_ANIMS` | empty | server, `zrb_init.py` | More animation folders, searched before `<home>/anim` and the shipped ones. |
 | `ZRB_AVATAR_MUSIC` | `auto` | server | `auto` dances while media plays — Windows' media controls (also from WSL), `playerctl` on Linux, or `media-control` (else Spotify/Music by AppleScript, which asks permission the first time) on macOS; `off` only dances on `zrb-avatar music on`. |
@@ -205,8 +205,8 @@ Models and animations are looked up in folders, in this order; the first file wi
 
 | Kind | Folders |
 | --- | --- |
-| models | `$ZRB_AVATAR_MODELS`, `~/.config/zrb-avatar/models` |
-| animations | `$ZRB_AVATAR_ANIMS`, `~/.config/zrb-avatar/anim`, the package's `anim/` |
+| models | `$ZRB_AVATAR_MODELS`, `~/.zrb/avatar/models` |
+| animations | `$ZRB_AVATAR_ANIMS`, `~/.zrb/avatar/anim`, the package's `anim/` |
 
 | Path | Convention |
 | --- | --- |
@@ -241,7 +241,7 @@ Constants with no setting of their own; edit the file to change them.
 
 ## Changing the model
 
-Put any VRM file (VRM 0.x or 1.0) in `~/.config/zrb-avatar/models/` (or a folder in `ZRB_AVATAR_MODELS`) as `<name>.vrm` and open it by name: `zrb-avatar <name>`. Without a name, the window shows the first model alphabetically. To switch while she runs, `zrb-avatar model <name>` (or ask zrb: its `AvatarModel` tool) swaps the model in every open window, in a second or two and without reloading it; the server remembers it for windows opened later and writes it to `<home>/model`, so a restart no longer puts back the first name in the folder. `zrb-avatar <name>` shows that model in the window it opens for that launch, and leaves the remembered choice alone — name it with `zrb-avatar model <name>` when you want it to stick. `GET /model` says which one is chosen and which ones the open windows show. No model ships with the package. Model files are kept out of git (`*.vrm` is ignored). Nothing in the code depends on the model: the camera fits it, and the pose and idle come from the animations, which three-vrm retargets onto any VRM, as VRoid Hub's playground does.
+Put any VRM file (VRM 0.x or 1.0) in `~/.zrb/avatar/models/` (or a folder in `ZRB_AVATAR_MODELS`) as `<name>.vrm` and open it by name: `zrb-avatar <name>`. Without a name, the window shows the first model alphabetically. To switch while she runs, `zrb-avatar model <name>` (or ask zrb: its `AvatarModel` tool) swaps the model in every open window, in a second or two and without reloading it; the server remembers it for windows opened later and writes it to `<home>/model`, so a restart no longer puts back the first name in the folder. `zrb-avatar <name>` shows that model in the window it opens for that launch, and leaves the remembered choice alone — name it with `zrb-avatar model <name>` when you want it to stick. `GET /model` says which one is chosen and which ones the open windows show. No model ships with the package. Model files are kept out of git (`*.vrm` is ignored). Nothing in the code depends on the model: the camera fits it, and the pose and idle come from the animations, which three-vrm retargets onto any VRM, as VRoid Hub's playground does.
 
 Where to get models:
 
@@ -270,7 +270,7 @@ Any other pool loads too, and plays once something asks for it (`zrb-avatar acti
 
 Pools nest: a subfolder's clips belong to the pool above it, as one group in the random pick. `idle/calm/*.vrma` loops with the idles, as often as any one other idle; `actions/greetings/hi.vrma` is the action `greetings/hi`. Overrides go by the whole path: your `actions/greetings/hi.vrma` replaces only that one. A clip is always played by its full path (`thinking/Thinking`, `actions/greetings/hi`); an action's short name (`greetings/hi`) works too, unless it is some other clip's full path (an `actions/thinking/Thinking.vrma` is `actions/thinking/Thinking`, as `thinking/Thinking` is the loop).
 
-To add your own, drop the file in, e.g. `~/.config/zrb-avatar/anim/actions/Wave.vrma`, and restart with `zrb-avatar` so the window loads it; zrb's tools see it at once. The folders cascade per file: yours replaces a shipped clip of the same `<pool>/<name>`, adds any new one, and every shipped clip you don't have still plays. A description, which `AvatarListActions` shows the agent, is read from the file's animation `extras.description` (optional). A file named like a shipped one replaces it: `~/.config/zrb-avatar/anim/idle/Relax.vrma`. Try an action with `zrb-avatar action Wave`.
+To add your own, drop the file in, e.g. `~/.zrb/avatar/anim/actions/Wave.vrma`, and restart with `zrb-avatar` so the window loads it; zrb's tools see it at once. The folders cascade per file: yours replaces a shipped clip of the same `<pool>/<name>`, adds any new one, and every shipped clip you don't have still plays. A description, which `AvatarListActions` shows the agent, is read from the file's animation `extras.description` (optional). A file named like a shipped one replaces it: `~/.zrb/avatar/anim/idle/Relax.vrma`. Try an action with `zrb-avatar action Wave`.
 
 Within a pool, clips play in random order with crossfades, picked by group: the first part of the name before a `-` (`stretch-side` belongs to `stretch`), so a family of clips comes up as often as any single other one. A pool's own clip (`idle/Idle`) is where she rests: she comes back to it after any other, and leaves it only now and then (30%). Every clip also plays mirrored, left and right swapped, as `<name>-mirror` in its group, and an action plays mirrored half the time: a wave with either hand. On top of whatever plays: the head tilts while thinking, nods while speaking, the eyes follow you, and the face shows zrb's emotion.
 
@@ -278,22 +278,29 @@ The shipped clips, by pool:
 
 | Pool | Clips |
 | --- | --- |
-| `idle/` | `Idle`, `IdleCalm`, `IdleLong`, `IdleShift`, `LookAround`, `Relax`, `ShoulderRubbing`, `Sleepy`, `StretchArms`, `StretchNeck` |
+| `idle/` | `Idle` |
 | `thinking/` | `Thinking` |
-| `tool/` | `FilingCabinet-open`, `FilingCabinet-use`, `ModelPose`, `Shoot` |
-| `attention/` | `Angry`, `Clapping`, `FollowMe`, `Goodbye` |
-| `speaking/` | `Idle`, `Talking1`, `Talking2`, `Talking3`, `Talking4`, `Talking5` |
-| `dance/` | `Bounce`, `CossackDance`, `Drunk Dance`, `Feet Dance`, `FollowMe`, `HandsUp`, `HipHop`, `JumpAndTurnAround`, `Macarena`, `RandomDance`, `StepTouch`, `Sway`, `Twist` |
-| `actions/` | `Agreeing`, `Angry`, `Arguing`, `BatterOnDeck`, `Blush`, `Clapping`, `DoNotScareMe`, `Goodbye`, `Greeting`, `Jump`, `LookAround`, `ModelPose`, `PeaceSign`, `Pouting`, `Relax`, `Sad`, `Shoot`, `ShowFullBody`, `Sleepy`, `Spin`, `Squat`, `Surprised`, `TellingASecret`, `Thinking`, `WarriorIdle` |
+| `tool/` | `FixingKneeling` |
+| `attention/` | `Attention` |
+| `speaking/` | `Talking` |
+| `dance/` | `Dance` |
+| `actions/` | `Death`, `HitChest`, `HitHead`, `Interact`, `Jump`, `JumpLand`, `JumpStart`, `PickUpTable`, `PunchCross`, `PunchEnter`, `PunchJab`, `Roll` |
+
+Every pool except `actions` **loops** for as long as its state lasts, and that is what decides
+whether a clip belongs in one: a crouch, a greeting or a roll is an action however good it
+looks once. `thinking/Thinking` is `idle/Idle` byte for byte — the CC0 pack this set comes from
+has no thinking motion, and stillness reads better than mime in the state visited on every tool
+call. [PROVENANCE.md](PROVENANCE.md) records where each clip came from, and what was left out
+(a seated clip, until the window has a chair).
 
 The page looks a clip up by name, so `zrb-avatar action Greeting` plays `actions/Greeting.vrma`; `zrb-avatar actions` lists everything with its length.
 
 Where to get more VRMA:
 
-- **VRoid's official 7-motion pack** (show full body, greeting, peace sign, shoot, spin, model pose, squat), free on [BOOTH](https://vroid.com/en/news/6HozzBIV0KkcKf9dc1fZGW). Free to use, commercial use with the credit "Animation credits to pixiv Inc.'s VRoid Project", but its terms forbid redistributing the files, so keep them out of git. E.g. `cp VRMA_02.vrma ~/.config/zrb-avatar/anim/actions/Greeting.vrma`.
+- **VRoid's official 7-motion pack** (show full body, greeting, peace sign, shoot, spin, model pose, squat), free on [BOOTH](https://vroid.com/en/news/6HozzBIV0KkcKf9dc1fZGW). Free to use, commercial use with the credit "Animation credits to pixiv Inc.'s VRoid Project", but its terms forbid redistributing the files, so keep them out of git. E.g. `cp VRMA_02.vrma ~/.zrb/avatar/anim/actions/Greeting.vrma`.
 - **Dances**: motion capture through bvh2vrma, e.g. the [AIST++](https://google.github.io/aistplusplus_dataset/) dance dataset (CC BY 4.0, credit needed) or the [CMU](http://mocap.cs.cmu.edu/) library (free). Mixamo's dances can be converted too, but its terms forbid sharing the files, so keep them in your own folder.
-- **Mixamo** (FBX, "Without Skin"): `cd app && npm install && npm run fbx2vrma -- <in.fbx> <out.vrma> ["what it looks like"]` converts one, retargeted the way three-vrm's [humanoidAnimation example](https://pixiv.github.io/three-vrm/packages/three-vrm/examples/humanoidAnimation/index.html) does, every track on one 30 fps time line, and a clip that keeps facing to one side turned to face front. Mixamo's terms forbid sharing the files, so keep the results in your own folder.
-- **Your own**: [bvh2vrma](https://vrm-c.github.io/bvh2vrma/) (VRM Consortium, MIT) converts BVH motion capture to VRMA, and VRoid Studio exports poses and animations as VRMA.
+- **Mixamo** (FBX, "Without Skin"): `cd tools && npm install && node fbx2vrma.mjs <in.fbx> <out.vrma> ["what it looks like"]` converts one, retargeted the way three-vrm's [humanoidAnimation example](https://pixiv.github.io/three-vrm/packages/three-vrm/examples/humanoidAnimation/index.html) does, every track on one 30 fps time line, and a clip that keeps facing to one side turned to face front. Mixamo's terms forbid sharing the files, so keep the results in your own folder.
+- **Your own**: `tools/` converts glTF, GLB, VRM (`gltf2vrma.py`), Mixamo FBX (`fbx2vrma.mjs`) and BVH motion capture (`bvh2vrma.mjs`); `tools/README.md` says what each needs and what a clip has to get right, and `node tools/vrma-info.mjs <file>` says what a loader makes of one. VRoid Studio also exports poses and animations as VRMA.
 
 ## The desktop app
 
@@ -327,7 +334,7 @@ CI (`.github/workflows/test.yml`) runs it with a pyflakes lint on every push to 
 
 ## Releasing
 
-Bump the version in `pyproject.toml` and `app/package.json`, then push a tag: `git tag 0.5.0 && git push --tags`. `.github/workflows/release.yml` publishes the package to PyPI and attaches the app zips to the GitHub release. PyPI publishing is trusted publishing, so first add this repository, the workflow `release.yml` and the environment `pypi` as a trusted publisher of `zrb-avatar` on pypi.org.
+Bump the version in `pyproject.toml` and `app/package.json`, then push a tag: `git tag 0.1.1 && git push origin 0.1.1`. `.github/workflows/release.yml` opens the GitHub release, publishes the package to PyPI and attaches the app zips to it; the tag must equal `pyproject.toml`'s version or the run stops before it publishes anything. PyPI publishing is trusted publishing, so first add this repository, the workflow `release.yml` and the environment `pypi` as a trusted publisher of `zrb-avatar` on pypi.org. Publishing by hand first (`python -m build && twine upload dist/*`) is also fine: the workflow notices the version is already on PyPI, skips that step and still releases the desktop app.
 
 ## Credits
 

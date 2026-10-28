@@ -4,9 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zrb-avatar"
-version = "0.1.0"
+version = "0.1.1"
 description = "A 3D avatar for zrb in a small, see-through, always-on-top window"
 readme = "README.md"
+# The same licence zrb itself declares, and a file to go with it: the identifier alone
+# leaves PyPI's licence field empty, which is what zrb's own page shows.
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = []  # the server and the CLI are stdlib only; zrb_init.py runs inside zrb
 
@@ -23,4 +27,4 @@ Homepage = "https://github.com/state-alchemists/zrb-avatar"
 packages = ["zrb_avatar"]
 
 [tool.hatch.build.targets.sdist]
-include = ["zrb_avatar", "tools", "README.md", "PROVENANCE.md"]
+include = ["zrb_avatar", "tools", "README.md", "PROVENANCE.md", "LICENSE"]

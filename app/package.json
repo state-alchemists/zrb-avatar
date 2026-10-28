@@ -1,7 +1,7 @@
 {
   "name": "zrb-avatar",
-  "version": "0.8.0",
-  "description": "zrb's face as an always-on-top desktop window",
+  "version": "0.1.1",
+  "description": "zrb's avatar as an always-on-top desktop window",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

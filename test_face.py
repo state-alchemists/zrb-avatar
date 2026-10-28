@@ -1397,8 +1397,7 @@ finally:
     server._view.clear()
     server._view.update(saved_view)
 
-import shutil  # noqa: E402
-import subprocess  # noqa: E402
+import shutil  # noqa: E402  (subprocess is imported further up, next to the music watcher)
 
 # The converters in tools/ are what turns a capture into a clip, and a syntax break there is
 # silent until somebody needs one. Python answers for its own; node, when it is installed,
