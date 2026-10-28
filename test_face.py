@@ -85,6 +85,48 @@ assert "Idle" in server.anims()["idle"]  # the shipped ones are still there
 assert server.anims()["actions/greetings"]["hi"].read_bytes() == b"hi"
 assert not any(" " in pool for pool in server.anims())
 
+# A white-labeled zrb runs under its own env prefix. The server imports no zrb, so it reads
+# the prefix from zrb's bare bootstrap key `_ZRB_ENV_PREFIX`, the same variable zrb takes its
+# own settings prefix from: one label, and her settings follow it.
+saved_prefix = os.environ.pop(server.PREFIX_VAR, None)
+assert server.env_name("PORT") == "ZRB_AVATAR_PORT"  # nothing set: zrb's own default
+os.environ[server.PREFIX_VAR] = "ACME"
+try:
+    assert server.env_name("PORT") == "ACME_AVATAR_PORT"
+    assert server.env_get("PORT", "7777") == "7777"  # ACME_AVATAR_PORT is not set
+    os.environ["ACME_AVATAR_PORT"] = "8899"
+    assert server.env_get("PORT") == "8899"
+    assert server.env_get("PORT", "7777", prefix="OTHER") == "7777"  # an explicit prefix wins
+finally:
+    os.environ.pop("ACME_AVATAR_PORT", None)
+    os.environ.pop(server.PREFIX_VAR, None)
+    if saved_prefix is not None:
+        os.environ[server.PREFIX_VAR] = saved_prefix
+
+# The client's URL is <PREFIX>_AVATAR_URL. The retired <PREFIX>_FACE_URL is not read, so a
+# leftover from a zrb-face setup cannot quietly point her at the old server.
+import importlib  # noqa: E402
+
+saved_env = {k: os.environ.get(k) for k in ("ZRB_AVATAR_URL", "ZRB_FACE_URL")}
+os.environ.pop(server.PREFIX_VAR, None)  # the client follows CFG.ENV_PREFIX, ZRB here
+try:
+    os.environ["ZRB_FACE_URL"] = "http://127.0.0.1:1/event"
+    os.environ.pop("ZRB_AVATAR_URL", None)
+    importlib.reload(face_client)
+    assert face_client.AVATAR_URL == "http://127.0.0.1:7777/event", face_client.AVATAR_URL
+    os.environ["ZRB_AVATAR_URL"] = "http://127.0.0.1:8899/event"
+    importlib.reload(face_client)
+    assert face_client.AVATAR_URL == "http://127.0.0.1:8899/event", face_client.AVATAR_URL
+finally:
+    for key, value in saved_env.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    if saved_prefix is not None:
+        os.environ[server.PREFIX_VAR] = saved_prefix
+    importlib.reload(face_client)
+
 # Relay: a POSTed event reaches an open /events stream.
 srv = server.serve("127.0.0.1", 0)
 port = srv.server_address[1]
@@ -541,17 +583,17 @@ assert (
 assert json.loads(get("/model")[1])["chosen"] is None
 server.MODEL_FILE = user / "model"  # back to the test's own file, never the developer's
 server._model["value"] = "yours"  # the state the rest of this file was written against
-face_client.FACE_URL, saved = f"http://127.0.0.1:{port}/event", face_client.FACE_URL
+face_client.AVATAR_URL, saved = f"http://127.0.0.1:{port}/event", face_client.AVATAR_URL
 try:  # what FaceModels and FaceModel ask
     assert face_client.ask("models") == ["mine", "yours"]
     # `mine`: the page opened with `?model=mine` is still open, and it stays on what it asked for
     # while `yours` is what is remembered — the two answers are different on purpose.
     assert face_client.ask("model") == {"chosen": "yours", "showing": ["mine"]}
 finally:
-    face_client.FACE_URL = saved
-face_client.FACE_URL, saved = "http://127.0.0.1:9/event", face_client.FACE_URL
+    face_client.AVATAR_URL = saved
+face_client.AVATAR_URL, saved = "http://127.0.0.1:9/event", face_client.AVATAR_URL
 assert face_client.ask("models", timeout=1) is None  # no server: None, no exception
-face_client.FACE_URL = saved
+face_client.AVATAR_URL = saved
 (
     user / "models" / "yours.vrm"
 ).unlink()  # gone from the folder: no longer chosen, nor sent
@@ -744,17 +786,17 @@ client.request(
 )
 assert client.getresponse().status == 404  # nobody asked for that one
 assert server.take_snapshot(timeout=0.3) is None  # pages open, but none answers
-url = face_client.FACE_URL
-face_client.FACE_URL = f"http://127.0.0.1:{port}/event"
+url = face_client.AVATAR_URL
+face_client.AVATAR_URL = f"http://127.0.0.1:{port}/event"
 try:
     threading.Thread(target=fake_window, daemon=True).start()
     time.sleep(0.3)
     assert face_client.snapshot() == (PNG, {"state": "idle", "playing": "idle/wait"})
 finally:
-    face_client.FACE_URL = url
-face_client.FACE_URL, saved = "http://127.0.0.1:9/event", face_client.FACE_URL
+    face_client.AVATAR_URL = url
+face_client.AVATAR_URL, saved = "http://127.0.0.1:9/event", face_client.AVATAR_URL
 assert face_client.snapshot(timeout=1) is None  # no server: no picture, no exception
-face_client.FACE_URL = saved
+face_client.AVATAR_URL = saved
 
 # The watcher: a player's line becomes a music event, and the state is only sent when it changes.
 server.set_music(False)
@@ -999,6 +1041,21 @@ asyncio.run(_a_reading_goes_stale_rather_than_false())
 # This needs zrb, which the stdlib-only checks above do not, so it comes last.
 import zrb_avatar.zrb_init as face_zrb  # noqa: E402
 
+# The init spells the same noun the server does: <PREFIX>_AVATAR_*, never the retired _FACE_.
+from zrb.config.config import CFG  # noqa: E402
+
+saved_setting = os.environ.get(f"{CFG.ENV_PREFIX}_AVATAR_PRESENCE")
+os.environ[f"{CFG.ENV_PREFIX}_AVATAR_PRESENCE"] = "size"
+os.environ[f"{CFG.ENV_PREFIX}_FACE_PRESENCE"] = "idle"  # what zrb-face read, now ignored
+try:
+    assert face_zrb._setting("PRESENCE", "off") == "size"
+finally:
+    os.environ.pop(f"{CFG.ENV_PREFIX}_FACE_PRESENCE", None)
+    if saved_setting is None:
+        os.environ.pop(f"{CFG.ENV_PREFIX}_AVATAR_PRESENCE", None)
+    else:
+        os.environ[f"{CFG.ENV_PREFIX}_AVATAR_PRESENCE"] = saved_setting
+
 assert face_zrb._ambient_line() == (
     "face — presence: not looked (no watch) · camera: nothing reported yet · "
     "avatar: unknown · music: off"
@@ -1148,9 +1205,9 @@ assert asyncio.run(_sensing_goes_on_during_a_turn()) == ("tara-office", True)
 
 # Her own switches, through the tool and back: the round trip to the server is the point, so this
 # is not a mock. And the greeting hook asks before it plays, which is the one switch zrb acts on.
-face_client.FACE_URL, saved_lib_url = (
+face_client.AVATAR_URL, saved_lib_url = (
     f"http://127.0.0.1:{port}/event",
-    face_client.FACE_URL,
+    face_client.AVATAR_URL,
 )
 try:
     said = face_zrb.FaceAutonomy()
@@ -1180,13 +1237,13 @@ try:
         face_zrb.send = real_send
     assert face_client.consents("greeting") is True  # and nothing changed
 finally:
-    face_client.FACE_URL = saved_lib_url
+    face_client.AVATAR_URL = saved_lib_url
 # No server is not a refusal: every one of these did its thing before she could say otherwise.
-face_client.FACE_URL = "http://127.0.0.1:9/event"
+face_client.AVATAR_URL = "http://127.0.0.1:9/event"
 try:
     assert face_client.consents("greeting") is True
 finally:
-    face_client.FACE_URL = saved_lib_url
+    face_client.AVATAR_URL = saved_lib_url
 # The nudge: its own hours and its own ledger. The rules are cheap and answerable every ten
 # minutes; the turn they start is where the model decides whether it is worth saying anything.
 face_zrb.NUDGE_FILE = user / "nudge.json"
@@ -1256,7 +1313,7 @@ assert face_zrb.NUDGE in ("auto", "off")
 assert face_zrb.nudge_watch in face_zrb.llm_chat.triggers
 # Every hour and window above is a setting, not a constant in the file, and a value that does not
 # look like the example falls back to the default rather than taking the nudge down with it.
-var = lambda name: f"{face_zrb.CFG.ENV_PREFIX}_FACE_{name}"  # noqa: E731
+var = lambda name: f"{face_zrb.CFG.ENV_PREFIX}_AVATAR_{name}"  # noqa: E731
 assert face_zrb._hours("NUDGE_HOURS", "7-24") == range(7, 24)
 assert face_zrb._window("NUDGE_BED", "22:30-24:00") == (22 * 60 + 30, 24 * 60)
 assert face_zrb._window("NUDGE_LUNCH", "12:00-13:30") == (12 * 60, 13 * 60 + 30)

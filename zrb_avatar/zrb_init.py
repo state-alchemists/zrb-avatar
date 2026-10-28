@@ -73,13 +73,18 @@ from zrb.llm.ui.trigger import TriggerInput
 # Appended, not prepended: installed, this folder is another venv's site-packages,
 # whose compiled modules would shadow the running zrb's own (rpds, pydantic_core).
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# zrb's prefix is authoritative here -- a white-labeled zrb sets its own. The standalone
+# server imports no zrb, so it reads the prefix from this bare variable instead (zrb's own
+# bootstrap key); passing it on is what keeps the two spellings of a setting the same one
+# for anything this process starts, `zrb-avatar` included.
+os.environ.setdefault("_ZRB_ENV_PREFIX", CFG.ENV_PREFIX)
 from zrb_avatar.client import ask, face_hooks, send, snapshot, with_mouth  # noqa: E402
 from zrb_avatar.idle import LastInput  # noqa: E402
 from zrb_avatar.server import HOME, clips, playable, short_name  # noqa: E402
 
 
 def _setting(name: str, default: str) -> str:
-    return os.getenv(f"{CFG.ENV_PREFIX}_FACE_{name}", default)
+    return os.getenv(f"{CFG.ENV_PREFIX}_AVATAR_{name}", default)
 
 
 def _hours(name: str, default: str) -> range:
@@ -88,7 +93,7 @@ def _hours(name: str, default: str) -> range:
     try:
         return range(int(first), int(last))
     except ValueError:
-        print(f"{CFG.ENV_PREFIX}_FACE_{name} is not like {default}; using {default}")
+        print(f"{CFG.ENV_PREFIX}_AVATAR_{name} is not like {default}; using {default}")
         first, _, last = default.partition("-")
         return range(int(first), int(last))
 
@@ -99,7 +104,7 @@ def _window(name: str, default: str) -> tuple[int, int]:
     try:
         return _minutes(first), _minutes(last)
     except ValueError:
-        print(f"{CFG.ENV_PREFIX}_FACE_{name} is not like {default}; using {default}")
+        print(f"{CFG.ENV_PREFIX}_AVATAR_{name} is not like {default}; using {default}")
         first, _, last = default.replace("24:00", "23:60", 1).partition("-")
         return _minutes(first), _minutes(last)
 

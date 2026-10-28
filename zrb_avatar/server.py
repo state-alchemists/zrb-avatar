@@ -23,10 +23,13 @@ the rest on (see AUTONOMY_DEFAULTS).
 Stdlib only; run with `python3 server.py` or `zrb-avatar serve`, then open http://localhost:7777.
 
 Models and animations are looked up in folders, the first match winning:
-  models:      $ZRB_AVATAR_MODELS..., <home>/models
-  animations:  $ZRB_AVATAR_ANIMS...,  <home>/anim, the ones shipped in this package
-<home> is $ZRB_AVATAR_HOME, ~/.zrb/avatar by default; the variables take os.pathsep-separated
-lists. An animation is <folder>/<pool>/<name>.vrma: the pool (idle, thinking, dance, actions, ...)
+  models:      $<PREFIX>_AVATAR_MODELS..., <home>/models
+  animations:  $<PREFIX>_AVATAR_ANIMS...,  <home>/anim, the ones shipped in this package
+<home> is $<PREFIX>_AVATAR_HOME, ~/.zrb/avatar by default. <PREFIX> is ZRB unless zrb is
+white-labeled: it is read from the bare `_ZRB_ENV_PREFIX`, the same variable zrb takes its
+own settings prefix from, so a distribution running under another label needs no code change
+here. The variables take os.pathsep-separated lists. An animation is <folder>/<pool>/<name>.vrma:
+the pool (idle, thinking, dance, actions, ...)
 says when it plays. Pools nest (actions/greetings/hi.vrma is in the pool actions/greetings), and a
 nested pool's clips play with its top pool's.
 
@@ -55,8 +58,27 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# zrb spells its own settings <ENV_PREFIX>_*, and reads that prefix from the bare
+# `_ZRB_ENV_PREFIX` -- the bootstrap key in zrb's config, deliberately unprefixed so it
+# cannot depend on itself. Reading the same variable is what lets a white-labeled zrb
+# (one whose prefix is not ZRB) point this server at its own settings, and the server
+# still never imports zrb.
+PREFIX_VAR = "_ZRB_ENV_PREFIX"
+DEFAULT_PREFIX = "ZRB"
+
+
+def env_name(setting: str, prefix: str | None = None) -> str:
+    """The variable that holds an avatar setting: `HOME` -> `ZRB_AVATAR_HOME`."""
+    return f"{prefix or os.getenv(PREFIX_VAR) or DEFAULT_PREFIX}_AVATAR_{setting}"
+
+
+def env_get(setting: str, default: str = "", prefix: str | None = None) -> str:
+    """An avatar setting's value, spelled with the prefix zrb is running under."""
+    return os.getenv(env_name(setting, prefix), default)
+
+
 HERE = Path(__file__).parent
-HOME = Path(os.path.expanduser(os.getenv("ZRB_AVATAR_HOME", "~/.zrb/avatar")))
+HOME = Path(os.path.expanduser(env_get("HOME", "~/.zrb/avatar")))
 
 
 def _dirs(variable: str, sub: str, *bundled: Path) -> list[Path]:
@@ -68,8 +90,8 @@ def _dirs(variable: str, sub: str, *bundled: Path) -> list[Path]:
     return [*listed, HOME / sub, *bundled]
 
 
-MODEL_DIRS = _dirs("ZRB_AVATAR_MODELS", "models")
-ANIM_DIRS = _dirs("ZRB_AVATAR_ANIMS", "anim", HERE / "anim")
+MODEL_DIRS = _dirs(env_name("MODELS"), "models")
+ANIM_DIRS = _dirs(env_name("ANIMS"), "anim", HERE / "anim")
 NAME = re.compile(r"[\w .()-]+")  # a file name without its extension; no slashes
 POOL = re.compile(r"[\w-]+")
 MAX_EVENT_BYTES = 65536
@@ -102,7 +124,7 @@ def _on(variable: str) -> bool:
 # trip the view event is already making, because a reply takes seconds and a boundary cannot wait
 # for one. Off unless asked for: an install should not start refusing looks before whoever runs it
 # has decided that is what they want.
-REFLEX = _on("ZRB_AVATAR_REFLEX")
+REFLEX = _on(env_name("REFLEX"))
 # And this is what she does about it: crossed forearms over chest and hips, her face turned away,
 # shoulders in. A held pose rather than a clip, because nothing in the animation pool covers her.
 COVER = {"leftHand": "chest", "rightHand": "hips", "head": "away", "body": "hunch"}
@@ -901,10 +923,10 @@ def serve(host: str, port: int) -> ThreadingHTTPServer:
 
 
 def main() -> None:
-    host = os.getenv("ZRB_AVATAR_HOST", "127.0.0.1")
-    port = int(os.getenv("ZRB_AVATAR_PORT", "7777"))
+    host = env_get("HOST", "127.0.0.1")
+    port = int(env_get("PORT", "7777"))
     print(f"face on http://localhost:{port}")
-    if os.getenv("ZRB_AVATAR_MUSIC", "auto") == "auto":
+    if env_get("MUSIC", "auto") == "auto":
         if command := music_command():
             threading.Thread(target=watch_music, args=(command,), daemon=True).start()
         elif sys.platform == "darwin":

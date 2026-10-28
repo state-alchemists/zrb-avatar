@@ -28,7 +28,7 @@ from pathlib import Path
 
 from zrb_avatar import server
 
-PORT = int(os.getenv("ZRB_AVATAR_PORT", "7777"))
+PORT = int(server.env_get("PORT", "7777"))
 LOG = Path(tempfile.gettempdir()) / "zrb-avatar.log"
 
 
@@ -49,7 +49,7 @@ def post(message: dict) -> None:
 def window() -> list[str] | None:
     """The window program: ZRB_AVATAR_APP, the Windows build from WSL, the macOS app, or
     Electron from a source checkout. None: open a browser instead."""
-    if os.getenv("ZRB_AVATAR_APP"):
+    if server.env_get("APP"):
         return [os.environ["ZRB_AVATAR_APP"]]
     if "microsoft" in platform.uname().release.lower():
         exe = Path(

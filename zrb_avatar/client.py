@@ -11,15 +11,21 @@ from array import array
 
 from zrb.config.config import CFG
 
-FACE_URL = os.getenv(f"{CFG.ENV_PREFIX}_FACE_URL", "http://127.0.0.1:7777/event")
+# zrb spells an avatar's settings <ENV_PREFIX>_AVATAR_* here, where CFG.ENV_PREFIX is
+# authoritative: a white-labeled zrb sets its own prefix and the variables follow. The
+# standalone server (server.py, which imports no zrb) reads the same prefix from the bare
+# `_ZRB_ENV_PREFIX` -- zrb's bootstrap key -- so the two agree without sharing code.
+AVATAR_URL = os.getenv(
+    f"{CFG.ENV_PREFIX}_AVATAR_URL", "http://127.0.0.1:7777/event"
+)
 MOUTH_STEP = 0.04  # seconds of audio per mouth value
 # Calibration knob: raise it if the mouth barely opens, lower it if it never closes.
-MOUTH_GAIN = float(os.getenv(f"{CFG.ENV_PREFIX}_FACE_MOUTH_GAIN", "4"))
+MOUTH_GAIN = float(os.getenv(f"{CFG.ENV_PREFIX}_AVATAR_MOUTH_GAIN", "4"))
 
 
 def send(message: dict) -> None:
     request = urllib.request.Request(
-        FACE_URL, json.dumps(message).encode(), {"Content-Type": "application/json"}
+        AVATAR_URL, json.dumps(message).encode(), {"Content-Type": "application/json"}
     )
     try:
         urllib.request.urlopen(request, timeout=0.2).close()
@@ -29,7 +35,7 @@ def send(message: dict) -> None:
 
 def ask(path: str, timeout: float = 2):
     """The server's JSON answer to GET <path> ("models", "model"); None while it is not running."""
-    url = FACE_URL.rsplit("/", 1)[0] + "/" + path
+    url = AVATAR_URL.rsplit("/", 1)[0] + "/" + path
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             return json.loads(response.read())
@@ -50,7 +56,7 @@ def consents(what: str) -> bool:
 def snapshot(timeout: float = 10) -> tuple[bytes, dict] | None:
     """A PNG of her window as the user sees it, and what she is doing (state, the clip playing,
     music, emotion); None while the server or the window is not there."""
-    url = FACE_URL.rsplit("/", 1)[0] + "/snapshot"
+    url = AVATAR_URL.rsplit("/", 1)[0] + "/snapshot"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             about = json.loads(response.headers.get("X-Face") or "{}")
