@@ -208,6 +208,8 @@ Models and animations are looked up in folders, in this order; the first file wi
 | models | `$ZRB_AVATAR_MODELS`, `~/.zrb/avatar/models` |
 | animations | `$ZRB_AVATAR_ANIMS`, `~/.zrb/avatar/anim`, the package's `anim/` |
 
+Only `models/` is yours from the start: no model ships with the package, so a fresh install has nothing to show until you put a `.vrm` there. The animations do ship — inside the package, where an upgrade replaces them whole — so `~/.zrb/avatar/anim` does **not** exist until you add a clip of your own, and `zrb-avatar dirs` marks it `(missing)` until then. It is an override folder, not a copy.
+
 | Path | Convention |
 | --- | --- |
 | `<models folder>/<name>.vrm` | A model, opened by `<name>`. Only files directly in the folder are served. |
@@ -270,7 +272,7 @@ Any other pool loads too, and plays once something asks for it (`zrb-avatar acti
 
 Pools nest: a subfolder's clips belong to the pool above it, as one group in the random pick. `idle/calm/*.vrma` loops with the idles, as often as any one other idle; `actions/greetings/hi.vrma` is the action `greetings/hi`. Overrides go by the whole path: your `actions/greetings/hi.vrma` replaces only that one. A clip is always played by its full path (`thinking/Thinking`, `actions/greetings/hi`); an action's short name (`greetings/hi`) works too, unless it is some other clip's full path (an `actions/thinking/Thinking.vrma` is `actions/thinking/Thinking`, as `thinking/Thinking` is the loop).
 
-To add your own, drop the file in, e.g. `~/.zrb/avatar/anim/actions/Wave.vrma`, and restart with `zrb-avatar` so the window loads it; zrb's tools see it at once. The folders cascade per file: yours replaces a shipped clip of the same `<pool>/<name>`, adds any new one, and every shipped clip you don't have still plays. A description, which `AvatarListActions` shows the agent, is read from the file's animation `extras.description` (optional). A file named like a shipped one replaces it: `~/.zrb/avatar/anim/idle/Relax.vrma`. Try an action with `zrb-avatar action Wave`.
+To add your own, make the folder first — it starts absent, since the shipped clips are read from the package — then drop the file in, e.g. `mkdir -p ~/.zrb/avatar/anim/actions && cp Wave.vrma ~/.zrb/avatar/anim/actions/`, and restart with `zrb-avatar` so the window loads it; zrb's tools see it at once. The folders cascade per file: yours replaces a shipped clip of the same `<pool>/<name>`, adds any new one, and every shipped clip you don't have still plays. A description, which `AvatarListActions` shows the agent, is read from the file's animation `extras.description` (optional). A file named like a shipped one replaces it: `~/.zrb/avatar/anim/idle/Relax.vrma`. Try an action with `zrb-avatar action Wave`.
 
 Within a pool, clips play in random order with crossfades, picked by group: the first part of the name before a `-` (`stretch-side` belongs to `stretch`), so a family of clips comes up as often as any single other one. A pool's own clip (`idle/Idle`) is where she rests: she comes back to it after any other, and leaves it only now and then (30%). Every clip also plays mirrored, left and right swapped, as `<name>-mirror` in its group, and an action plays mirrored half the time: a wave with either hand. On top of whatever plays: the head tilts while thinking, nods while speaking, the eyes follow you, and the face shows zrb's emotion.
 
