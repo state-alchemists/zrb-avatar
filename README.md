@@ -17,7 +17,7 @@ zrb chat
 
 The window is a small desktop app; download it from the [releases](https://github.com/state-alchemists/zrb-avatar/releases) or build it (see [The desktop app](#the-desktop-app)). Without it, `zrb-avatar` opens the page in your browser instead.
 
-`zrb-avatar` opens the Windows build from WSL, the installed app on macOS, or Electron from `app/` in a source checkout (`ZRB_AVATAR_APP` overrides the program). It restarts the server each time, so the server always runs the current code with your current settings; open windows reload by themselves. The server keeps running across chats; its output goes to `zrb-avatar.log` in the temp folder, and `pkill -f "[z]rb_face/server.py"` stops it. The order doesn't matter: the window waits for the server, reloads itself when the server restarts, and zrb skips sending while either is missing. If a model can't be loaded, the window says so in red and tries again every few seconds.
+`zrb-avatar` opens the Windows build from WSL, the installed app on macOS, or Electron from `app/` in a source checkout (`ZRB_AVATAR_APP` overrides the program). It restarts the server each time, so the server always runs the current code with your current settings; open windows reload by themselves. The server keeps running across chats; its output goes to `zrb-avatar.log` in the temp folder, and `pkill -f "[z]rb_avatar serve"` stops it (or Ctrl-C if you started it with `zrb-avatar serve` in a terminal). The order doesn't matter: the window waits for the server, reloads itself when the server restarts, and zrb skips sending while either is missing. If a model can't be loaded, the window says so in red and tries again every few seconds.
 
 ## How it fits together
 
