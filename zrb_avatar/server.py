@@ -662,7 +662,10 @@ def seed_anims(restore: bool = False, source: Path | None = None) -> list[str]:
     Returns one line per change, for the caller to print.
     """
     source = source or SHIPPED_ANIMS
-    shipped = {str(p.relative_to(source)): p for p in source.rglob("*.vrma")}
+    # as_posix(): the manifest is keyed by "<pool>/<name>.vrma" on every platform, so a home
+    # folder keeps working when it is looked at from another one (and Windows, which would
+    # otherwise key it with backslashes).
+    shipped = {p.relative_to(source).as_posix(): p for p in source.rglob("*.vrma")}
     if not shipped:
         return []
     template = _template()
@@ -693,7 +696,7 @@ def anim_report() -> list[str]:
     known = _template()
     mine, copied = [], []
     for path in sorted(ANIM_HOME.rglob("*.vrma")):
-        rel = str(path.relative_to(ANIM_HOME))
+        rel = path.relative_to(ANIM_HOME).as_posix()
         (copied if known["files"].get(rel) == _digest(path) else mine).append(rel)
     lines = [
         f"{ANIM_HOME} (copied from {known['version'] or 'an unknown version'})",
