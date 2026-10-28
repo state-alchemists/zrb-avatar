@@ -584,7 +584,7 @@ assert json.loads(get("/model")[1])["chosen"] is None
 server.MODEL_FILE = user / "model"  # back to the test's own file, never the developer's
 server._model["value"] = "yours"  # the state the rest of this file was written against
 face_client.AVATAR_URL, saved = f"http://127.0.0.1:{port}/event", face_client.AVATAR_URL
-try:  # what AvatarModels and AvatarModel ask
+try:  # what AvatarListModels and AvatarModel ask
     assert face_client.ask("models") == ["mine", "yours"]
     # `mine`: the page opened with `?model=mine` is still open, and it stays on what it asked for
     # while `yours` is what is remembered — the two answers are different on purpose.
@@ -1059,21 +1059,21 @@ finally:
 # What a turn she starts is asked for is a setting too: the default keeps her quiet unless she has
 # something to say, {nothing_to_say} is the one placeholder it reads, and an empty value asks for
 # nothing at all — a white label's own voice, without patching this file.
-saved_prompt = face_zrb.TALK_PROMPT
+saved_prompt = face_zrb.PROACTIVE_PROMPT
 try:
     assert face_zrb._proactive("a turn worth taking", "test").text == (
         "[test, not typed by the user] a turn worth taking Say something short and natural "
         f"only if it is worth saying; otherwise reply exactly {face_zrb.NOTHING_TO_SAY}"
     )
-    face_zrb.TALK_PROMPT = "Only if it matters; else {nothing_to_say}"
+    face_zrb.PROACTIVE_PROMPT = "Only if it matters; else {nothing_to_say}"
     assert face_zrb._proactive("x", "test").text == (
         "[test, not typed by the user] x Only if it matters; else "
         f"{face_zrb.NOTHING_TO_SAY}"
     )
-    face_zrb.TALK_PROMPT = ""
+    face_zrb.PROACTIVE_PROMPT = ""
     assert face_zrb._proactive("x", "test").text == "[test, not typed by the user] x"
 finally:
-    face_zrb.TALK_PROMPT = saved_prompt
+    face_zrb.PROACTIVE_PROMPT = saved_prompt
 
 assert face_zrb._ambient_line() == (
     "face — presence: not looked (no watch) · camera: nothing reported yet · "

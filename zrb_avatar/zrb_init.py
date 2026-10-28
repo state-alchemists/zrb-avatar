@@ -7,10 +7,10 @@ Loading this script turns the face on: zrb's state and speech go to the server
 (server.py, `python -m zrb_avatar serve`). It
 also owns zrb's speech (`enable_speech`), so other init scripts should only set
 the voice (CFG.DEFAULT_LLM_SPEECH_BACKEND / _VOICE), not call `enable_speech`.
-zrb also gets nine tools of hers: AvatarActions lists her animations by pool with what each looks
+zrb also gets nine tools of hers: AvatarListActions lists her animations by pool with what each looks
 like, AvatarAction plays one once, AvatarPose moves her body itself (hands, head, posture) for a few
 seconds, AvatarRest lets go of a pose she is holding, AvatarAutonomy reads or changes what she may
-do unasked, AvatarLook shows her own window as the user sees it, AvatarModels lists the avatars (VRM
+do unasked, AvatarLook shows her own window as the user sees it, AvatarListModels lists the avatars (VRM
 models) with the one showing, AvatarModel switches to another, and AvatarStatus reports what the
 ambient line says.
 
@@ -22,7 +22,7 @@ Settings (the prefix follows zrb's CFG.ENV_PREFIX, ZRB by default):
                              hips); comma-separated, empty: never
   ZRB_AVATAR_IDLE_MINUTES      quiet minutes before "idle" speaks (45)
   ZRB_AVATAR_COOLDOWN          seconds between turns she starts herself (1200)
-  ZRB_AVATAR_TALK_PROMPT       what a turn she starts asks her to do, after the situation
+  ZRB_AVATAR_PROACTIVE_PROMPT    what a turn she starts asks her to do, after the situation
                              itself ("Say something short and natural only if it is
                              worth saying; otherwise reply exactly {nothing_to_say}").
                              {nothing_to_say} is the one placeholder it reads; an empty
@@ -127,8 +127,8 @@ IDLE_MINUTES = float(_setting("IDLE_MINUTES", "45"))
 COOLDOWN_SECONDS = float(_setting("COOLDOWN", "1200"))
 # How a turn she starts is asked for, after the situation it reacts to: the whole instruction,
 # with one placeholder. A white-labeled avatar can ask for another voice, or for none at all.
-TALK_PROMPT = _setting(
-    "TALK_PROMPT",
+PROACTIVE_PROMPT = _setting(
+    "PROACTIVE_PROMPT",
     "Say something short and natural only if it is worth saying; "
     "otherwise reply exactly {nothing_to_say}",
 )
@@ -398,7 +398,7 @@ async def nudge_watch():
 
 def _proactive(text: str, channel: str, attachments: tuple = ()) -> TriggerInput:
     _companion["last_proactive"] = time.monotonic()
-    instruction = TALK_PROMPT.replace("{nothing_to_say}", NOTHING_TO_SAY).strip()
+    instruction = PROACTIVE_PROMPT.replace("{nothing_to_say}", NOTHING_TO_SAY).strip()
     return TriggerInput(
         text=(
             f"[{channel}, not typed by the user] {text}"
@@ -656,7 +656,7 @@ def AvatarStatus() -> str:
     return _ambient_line()
 
 
-def AvatarActions() -> str:
+def AvatarListActions() -> str:
     """List the body animations you can play on your avatar with AvatarAction, by pool: each one's
     name, what it looks like and when it fits, and how long it takes. The list is read now, so it
     includes animations the user added since this chat started."""
@@ -682,14 +682,14 @@ def AvatarActions() -> str:
 def AvatarAction(name: str) -> str:
     """Play a body animation on your avatar once, like a gesture alongside your words (a wave
     hello, a nod, a thumbs-up, a laugh), then she goes back to what she was doing. Use it
-    sparingly, when it fits the moment; AvatarActions lists them all with what each looks like.
+    sparingly, when it fits the moment; AvatarListActions lists them all with what each looks like.
     """
     found = playable()
     if name not in found:
         actions = [
             n for n, c in found.items() if c["pool"] == "actions" and "/" not in n
         ]
-        return f"No such animation. Actions: {', '.join(actions) or 'none'}. AvatarActions lists them all, by pool."
+        return f"No such animation. Actions: {', '.join(actions) or 'none'}. AvatarListActions lists them all, by pool."
     clip = found[name]
     send({"type": "action", "value": f"{clip['pool']}/{clip['name']}"})
     return f"Playing {name} ({clip['seconds']} s)."
@@ -772,7 +772,7 @@ def AvatarPose(
     E.g. covering yourself when embarrassed: right_hand="chest", left_hand="hips", head="away",
     body="hunch". Thinking: right_hand="chin", head="tilt-left". A thumbs-up: right_arm=[20, 90],
     right_elbow=90, right_fingers="thumbs-up". Standing on one leg: left_leg=[60, 0], left_knee=90.
-    Use it to act out the moment, alongside your words, when no animation from AvatarActions fits.
+    Use it to act out the moment, alongside your words, when no animation from AvatarListActions fits.
     """
 
     def bad(value, allowed=(), n=0):
@@ -889,7 +889,7 @@ def AvatarAutonomy(
     return said + (f" — but not {', '.join(refused)}." if refused else ".")
 
 
-def AvatarModels() -> str:
+def AvatarListModels() -> str:
     """List the avatars (VRM models) you can appear as, and say which one is showing now. Use it
     when the user asks what you can look like, or before AvatarModel. The list is read now, so it
     includes models the user added since this chat started."""
@@ -910,7 +910,7 @@ def AvatarModels() -> str:
 
 
 def AvatarModel(name: str) -> str:
-    """Switch your avatar to another VRM model, by name as AvatarModels lists it; every open window
+    """Switch your avatar to another VRM model, by name as AvatarListModels lists it; every open window
     changes at once and keeps it until the face server restarts. Use it when the user asks you to
     look different or to change your avatar, not on your own whim."""
     names = ask("models")
@@ -955,13 +955,13 @@ llm_chat.prompt_manager.add_live_context("face", lambda _: _ambient_line())
 # Her own window, animations and avatars: nothing to approve. The actions are read on every call, so
 # ones added while zrb runs work at once.
 for tool in (
-    AvatarActions,
+    AvatarListActions,
     AvatarAction,
     AvatarPose,
     AvatarRest,
     AvatarAutonomy,
     AvatarLook,
-    AvatarModels,
+    AvatarListModels,
     AvatarModel,
     AvatarStatus,
 ):
