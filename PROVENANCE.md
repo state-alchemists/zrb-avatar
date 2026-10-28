@@ -18,9 +18,20 @@
 
 `gltf2vrma.py` renames the rig onto VRM humanoid bone names, drops every channel
 the VRM Animation spec does not allow (scale everywhere, translation outside the
-hips), and writes one GLB per clip with the `VRMC_vrm_animation` extension. No
-motion is retimed, resampled or edited: the keyframes and their times are copied
-as they are.
+hips), and writes one GLB per clip with the `VRMC_vrm_animation` extension.
+
+It does change the timing in two ways, both forced by what a consumer requires:
+
+- **One time line per clip.** The source keys each bone only when it changes, so
+  channels carried different keyframe counts; the app asserts one count across a
+  clip. Every channel is resampled onto a single 30 fps grid, rotations with slerp
+  along the shorter arc, positions linearly.
+- **`min`/`max` on each sampler input.** glTF requires them, and a clip's length is
+  read straight off them — without them the server reported `seconds: None`.
+
+Nodes keep only `name`, transform and `children`: the source is a character glTF,
+so its mannequin node otherwise drags in `mesh` and `skin` references the animation
+file has no arrays for (see the verification section).
 
 The rig is a Blender/Rigify export (`DEF-` bones, three joints per finger). Its
 rest pose was measured against the pack's own `A_TPose` clip and found to be a
@@ -50,20 +61,34 @@ validator reject the file. Three-dimensional Retarget's online viewer refused ev
 clip for that reason. The converter now keeps only name, transform and children on
 a node.
 
-**Not verified: how the clips look on a VRoid model.** Nothing has been loaded
-through three-vrm or played in a window yet. That is the next test, and until it
-runs, "these retarget cleanly onto a Vroid body" is an expectation, not a fact.
+**Verified by eye on 2026-10-29**, by Go in <https://3dretarget.com/vrm-viewer>
+with `tara-bamboo.vrm`: the clips play and the retarget looks right. The one thing
+that looked wrong was not the conversion — the seated clips float, because a
+sitting pose needs a chair the window does not have. Their hips start 41% below
+rest height, measured with `harness/hips.mjs`, against 4% for a standing idle. So
+no seated clip is shipped; they stay in the converted set for whenever the window
+grows a chair.
+
+**Not verified:** how the clips look on the other nineteen models, and frame-by-frame
+smoothness — the judgment so far is real eyes on one model, not a measurement.
 
 ## What this set does not cover
 
 | Pool | Covered by this pack | Missing |
 |---|---|---|
-| idle | `Idle_Loop`, `Crouch_Idle_Loop`, `Sitting_Idle_Loop` | — |
-| speaking | `Idle_Talking_Loop`, `Sitting_Talking_Loop` | — |
+| idle | `Idle_Loop`, `Crouch_Idle_Loop` | — |
+| speaking | `Idle_Talking_Loop` | — |
+| thinking | `Idle_Torch_Loop` (an approximation: a standing idle holding a torch there is no model for) | anything that reads as thinking |
 | dance | `Dance_Loop` | variation; one clip is one dance |
-| actions | `Jump_Start/Loop/Land`, `Interact`, `PickUp_Table`, `Hit_Chest`, `Hit_Head`, `Punch_*`, `Sword_*`, `Pistol_*`, `Spell_*`, `Roll`, `Death01` | **greeting, wave, peace sign, thumbs-up, thinking, telling a secret** |
-| attention | — | nothing that says "look here" |
-| tool | `Interact`, `PickUp_Table`, `Fixing_Kneeling` | filing cabinet, any prop-specific action |
+| actions | `Jump_Start/Loop/Land`, `Interact`, `PickUp_Table`, `Hit_Chest`, `Hit_Head`, `Punch_*`, `Sword_*`, `Pistol_*`, `Spell_*`, `Roll`, `Death01` | **greeting, wave, peace sign, thumbs-up, telling a secret** |
+| attention | `Interact` (an approximation) | nothing that says "look here" |
+| tool | `PickUp_Table`, `Fixing_Kneeling` | filing cabinet, any prop-specific action |
+
+Excluded on purpose: every seated clip (`Sitting_Idle_Loop`, `Sitting_Talking_Loop`,
+`Sitting_Enter/Exit`, `Driving_Loop`) and, for now, the crouch idle is kept — a
+crouch reads on its own, a seated body does not. Props are the same problem in
+another form: the pack animates hands *as if* holding a sword, pistol or torch, and
+none of those objects exist in the window.
 
 The gesture gap is the one to plan around: every freely licensable source is
 capture of whole bodies, and ours needs hands doing specific things.
