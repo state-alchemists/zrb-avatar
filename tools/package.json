@@ -1,0 +1,15 @@
+{
+  "name": "zrb-avatar-tools",
+  "private": true,
+  "type": "module",
+  "description": "Converters and inspectors for zrb-avatar's .vrma clips",
+  "scripts": {
+    "fbx2vrma": "node fbx2vrma.mjs",
+    "bvh2vrma": "node bvh2vrma.mjs",
+    "vrma-info": "node vrma-info.mjs"
+  },
+  "devDependencies": {
+    "@pixiv/three-vrm-animation": "3.5.5",
+    "three": "0.169.0"
+  }
+}

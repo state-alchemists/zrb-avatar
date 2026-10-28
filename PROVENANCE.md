@@ -76,19 +76,32 @@ smoothness — the judgment so far is real eyes on one model, not a measurement.
 
 | Pool | Covered by this pack | Missing |
 |---|---|---|
-| idle | `Idle_Loop`, `Crouch_Idle_Loop` | — |
+| idle | `Idle_Loop` | — |
 | speaking | `Idle_Talking_Loop` | — |
-| thinking | `Idle_Torch_Loop` (an approximation: a standing idle holding a torch there is no model for) | anything that reads as thinking |
+| thinking | `Idle_Loop` again, on purpose | anything that reads as thinking |
 | dance | `Dance_Loop` | variation; one clip is one dance |
 | actions | `Jump_Start/Loop/Land`, `Interact`, `PickUp_Table`, `Hit_Chest`, `Hit_Head`, `Punch_*`, `Sword_*`, `Pistol_*`, `Spell_*`, `Roll`, `Death01` | **greeting, wave, peace sign, thumbs-up, telling a secret** |
 | attention | `Interact` (an approximation) | nothing that says "look here" |
-| tool | `PickUp_Table`, `Fixing_Kneeling` | filing cabinet, any prop-specific action |
+| tool | `Fixing_Kneeling` | filing cabinet, any prop-specific action |
 
-Excluded on purpose: every seated clip (`Sitting_Idle_Loop`, `Sitting_Talking_Loop`,
-`Sitting_Enter/Exit`, `Driving_Loop`) and, for now, the crouch idle is kept — a
-crouch reads on its own, a seated body does not. Props are the same problem in
-another form: the pack animates hands *as if* holding a sword, pistol or torch, and
-none of those objects exist in the window.
+Every pool above loops for as long as its state lasts, bar `actions`, which play once
+over a loop. That is what decided the set: a pool's clip is not a gesture, it is a
+posture held for seconds, so a clip that only makes sense as a one-off belongs in
+`actions` however good it looks once.
+
+Excluded for that reason: every seated clip (`Sitting_Idle_Loop`, `Sitting_Talking_Loop`,
+`Sitting_Enter/Exit`, `Driving_Loop`) floats without a chair, and `Crouch_Idle_Loop` and
+`PickUp_Table` became loops of crouching and grabbing, so the first is not shipped and the
+second moved to `actions`. `Idle_Torch_Loop` is also out: it holds a torch there is no
+model for, and thinking is a state visited on every tool call, where mime reads worse than
+stillness — so `thinking/Thinking.vrma` is `Idle_Loop` byte for byte, and the pool exists
+only so the state has a clip at all.
+
+Props are the same problem in another form: the pack animates hands *as if* holding a
+sword, pistol or torch, and none of those objects exist in the window. `Fixing_Kneeling`
+is the one shipped on inference rather than sight: its name says kneeling, while its hips
+sit at standing height (4% below rest, the same as `Idle_Loop`), so it should read as
+hands busy at waist height — worth one look before it becomes a default.
 
 The gesture gap is the one to plan around: every freely licensable source is
 capture of whole bodies, and ours needs hands doing specific things.

@@ -7,8 +7,7 @@
     "start": "electron .",
     "pack:win": "electron-packager . zrb-avatar --platform=win32 --arch=x64 --out=dist --overwrite",
     "pack:mac": "electron-packager . zrb-avatar --platform=darwin --arch=arm64,x64 --out=dist --overwrite",
-    "pack:linux": "electron-packager . zrb-avatar --platform=linux --arch=x64 --out=dist --overwrite",
-    "fbx2vrma": "node fbx2vrma.mjs"
+    "pack:linux": "electron-packager . zrb-avatar --platform=linux --arch=x64 --out=dist --overwrite"
   },
   "devDependencies": {
     "@electron/packager": "18.3.6",

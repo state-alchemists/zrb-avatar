@@ -23,4 +23,4 @@ Homepage = "https://github.com/state-alchemists/zrb-avatar"
 packages = ["zrb_avatar"]
 
 [tool.hatch.build.targets.sdist]
-include = ["zrb_avatar", "README.md"]
+include = ["zrb_avatar", "tools", "README.md", "PROVENANCE.md"]

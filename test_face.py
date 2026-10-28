@@ -1397,4 +1397,25 @@ finally:
     server._view.clear()
     server._view.update(saved_view)
 
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+
+# The converters in tools/ are what turns a capture into a clip, and a syntax break there is
+# silent until somebody needs one. Python answers for its own; node, when it is installed,
+# parses the rest without running them.
+TOOLS = Path(__file__).parent / "tools"
+assert (TOOLS / "gltf2vrma.py").is_file(), TOOLS
+help_text = subprocess.run(
+    [sys.executable, str(TOOLS / "gltf2vrma.py"), "--help"],
+    capture_output=True,
+    text=True,
+)
+assert help_text.returncode == 0 and "OUT_DIR" in help_text.stdout, help_text.stderr
+if shutil.which("node"):
+    for script in ("vrma-writer.mjs", "fbx2vrma.mjs", "bvh2vrma.mjs", "vrma-info.mjs"):
+        parsed = subprocess.run(
+            ["node", "--check", str(TOOLS / script)], capture_output=True, text=True
+        )
+        assert parsed.returncode == 0, (script, parsed.stderr)
+
 print("ok")
