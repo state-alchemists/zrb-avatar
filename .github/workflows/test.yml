@@ -1,0 +1,52 @@
+name: "Test"
+run-name: "Run tests for ${{ github.actor }}"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    # The suite starts a real server and reads an event stream, so a hang is a plausible
+    # failure mode -- and GitHub's default ceiling is 6 hours of runner time.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # zrb (which client.py and zrb_init.py import) needs 3.11+.
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          # The server watches the media player per platform (WSL/Windows, playerctl,
+          # media-control/AppleScript) and zrb-face opens a different app on each, so
+          # one interpreter each checks the suite still runs there.
+          - os: windows-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.13"
+
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[zrb]" flake8
+
+      - name: Lint
+        # Pyflakes-class checks only (unused imports and variables, undefined names), as zrb does.
+        run: flake8 --select=F zrb_face test_face.py zrb_init.py
+
+      - name: Test
+        # Also regenerates every clip in memory and fails if a shipped .vrma is stale.
+        run: python test_face.py

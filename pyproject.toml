@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zrb-avatar"
+version = "0.1.0"
+description = "A 3D avatar for zrb in a small, see-through, always-on-top window"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []  # the server and the CLI are stdlib only; zrb_init.py runs inside zrb
+
+[project.optional-dependencies]
+zrb = ["zrb"]
+
+[project.scripts]
+zrb-avatar = "zrb_avatar.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/state-alchemists/zrb-avatar"
+
+[tool.hatch.build.targets.wheel]
+packages = ["zrb_avatar"]
+
+[tool.hatch.build.targets.sdist]
+include = ["zrb_avatar", "README.md"]

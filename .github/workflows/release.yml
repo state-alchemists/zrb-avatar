@@ -1,0 +1,62 @@
+# Push a tag like 0.1.0: publishes the Python package to PyPI and attaches the desktop
+# app for Windows, macOS and Linux to a GitHub release.
+# PyPI publishing uses trusted publishing: add this repo and workflow (environment "pypi")
+# as a trusted publisher of the zrb-face project on pypi.org first.
+name: release
+on:
+  push:
+    tags: ["[0-9]*"]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pipx run build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  app:
+    needs: python
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest, pack: win }
+          - { os: macos-latest, pack: mac }
+          - { os: ubuntu-latest, pack: linux }
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci && npm run pack:${{ matrix.pack }}
+      - name: zip and upload
+        run: |
+          cd dist
+          for dir in */; do
+            name="${dir%/}"
+            if [ "${{ matrix.pack }}" = mac ]; then
+              ditto -c -k --keepParent "$name/zrb-face.app" "$name.zip"  # keeps the app's symlinks
+            else
+              7z a -r "$name.zip" "./$name/*" > /dev/null
+            fi
+            gh release upload "$GITHUB_REF_NAME" "$name.zip" --clobber
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}

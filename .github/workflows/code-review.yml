@@ -1,0 +1,56 @@
+name: "Code Review"
+run-name: "Review PR #${{ github.event.pull_request.number }} by ${{ github.actor }}"
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  review:
+    # Only PRs from a branch of this repository: pushing one takes write access,
+    # so a drive-by PR (from a fork) can't spend tokens on an LLM run, and
+    # GitHub withholds secrets from fork PRs anyway -- skipping beats a red X
+    # nobody can fix. Not author_association, as zrb's own guard adds: an org
+    # member whose membership is private shows up in the event as CONTRIBUTOR,
+    # which skipped every review of this repository's own PRs.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # pull-requests: write is what lets submit-comment post the report.
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ZRB_LLM_MODEL: ${{ secrets.ZRB_LLM_MODEL || vars.ZRB_LLM_MODEL }}
+      ZRB_LLM_JOURNAL_ENABLED: "false"
+      ZRB_INIT_STRICT: "1"
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install zrb
+        run: pip install zrb requests
+
+      # The command is fixed here, as in zrb-extras: no reusable workflow taking a command
+      # input to `eval`, which would become a script-injection sink the moment a caller built
+      # that command out of event data (a PR title, a branch name).
+      - name: Review and comment
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "⏭️  OPENAI_API_KEY is not configured; skipping the LLM review."
+            exit 0
+          fi
+          zrb submit-comment --range "origin/$GITHUB_BASE_REF...HEAD"
