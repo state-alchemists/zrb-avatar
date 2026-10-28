@@ -37,6 +37,19 @@ Verified on 2026-10-28:
   non-zero duration read from its own keyframes.
 - The extension is present with `specVersion: "1.0"` and a `humanBones` map.
 
+Verified on 2026-10-29, in the library the avatar app animates with
+(`@pixiv/three-vrm-animation` 3.5.5 over `three` 0.169.0, `harness/parse.mjs`):
+all 46 files parse, each with 52 rotation tracks plus one hips translation track,
+equal keyframe counts within a clip, and no NaN in any track.
+
+That check caught a real defect the earlier structural read missed: the nodes were
+copied straight from the source character glTF, so the mannequin node kept
+`{"mesh": 0, "skin": 0}` while the file carries no `meshes` or `skins` array — a
+dangling reference that makes three's GLTFLoader throw outright and makes a
+validator reject the file. Three-dimensional Retarget's online viewer refused every
+clip for that reason. The converter now keeps only name, transform and children on
+a node.
+
 **Not verified: how the clips look on a VRoid model.** Nothing has been loaded
 through three-vrm or played in a window yet. That is the next test, and until it
 runs, "these retarget cleanly onto a Vroid body" is an expectation, not a fact.
