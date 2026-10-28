@@ -9,6 +9,8 @@ zrb-avatar music on|off|auto dance (anim/dance) while idle, or follow the system
 zrb-avatar models            list the models (avatars), marking the one showing (*)
 zrb-avatar model <name>      switch every open window to <name>.vrm, and remember it for the next start
 zrb-avatar dirs              where models and animations are looked up
+zrb-avatar anim [reset]      what ~/.zrb/avatar/anim holds, and which clips are your own;
+                             `anim reset` puts the shipped ones back, keeping your edits
 zrb-avatar init-path         the file to add to ZRB_INIT_SCRIPTS
 """
 
@@ -180,6 +182,15 @@ def dirs() -> None:
         print(f"found {pool}:", ", ".join(sorted(names)))
 
 
+def anim(restore: bool) -> None:
+    """What the animation folder holds, or put the shipped clips back into it."""
+    if restore:
+        for note in server.seed_anims(restore=True):
+            print(note)
+    for line in server.anim_report():
+        print(line)
+
+
 def main() -> None:
     args = sys.argv[1:]
     command = args[0] if args else ""
@@ -203,9 +214,11 @@ def main() -> None:
         snapshot(args[1] if len(args) == 2 else "zrb-avatar-snapshot.png")
     elif command == "dirs":
         dirs()
+    elif command == "anim" and args[1:] in ([], ["reset"]):
+        anim("reset" in args[1:])
     elif command == "init-path":
         print(server.HERE / "zrb_init.py")
-    elif command in ("action", "music", "model", "models"):
+    elif command in ("action", "music", "model", "models", "anim"):
         sys.exit(__doc__)
     else:
         start(args)

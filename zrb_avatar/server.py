@@ -25,6 +25,10 @@ Stdlib only; run with `python3 server.py` or `zrb-avatar serve`, then open http:
 Models and animations are looked up in folders, the first match winning:
   models:      $<PREFIX>_AVATAR_MODELS..., <home>/models
   animations:  $<PREFIX>_AVATAR_ANIMS...,  <home>/anim, the ones shipped in this package
+The shipped clips are copied into <home>/anim on the first run, with a manifest beside them
+(.template.json) recording what was copied: so the folder that plays is the one you can edit.
+A copy follows the package while it is untouched, an edit is kept, and a deletion is recorded
+and honoured by the pool listing -- see seed_anims, and `zrb-avatar anim reset` to undo.
 <home> is $<PREFIX>_AVATAR_HOME, ~/.zrb/avatar by default. <PREFIX> is ZRB unless zrb is
 white-labeled: it is read from the bare `_ZRB_ENV_PREFIX`, the same variable zrb takes its
 own settings prefix from, so a distribution running under another label needs no code change
@@ -42,6 +46,7 @@ tab playing YouTube, which AppleScript cannot.
 """
 
 import base64
+import hashlib
 import json
 import os
 import platform
@@ -56,6 +61,7 @@ import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import metadata
 from pathlib import Path
 
 # zrb spells its own settings <ENV_PREFIX>_*, and reads that prefix from the bare
@@ -109,6 +115,12 @@ AUTONOMY_FILE = (
 MODEL_FILE = (
     HOME / "model"
 )  # the one she chose, so a restart does not put the first name back
+# The shipped clips are copied here on the first run, so the folder you edit is the one that
+# plays. The manifest beside them records what was copied and from which version, which is how
+# a clip you have not touched can follow the package while one you edited stays yours.
+ANIM_HOME = HOME / "anim"
+TEMPLATE_FILE = ANIM_HOME / ".template.json"
+SHIPPED_ANIMS = HERE / "anim"
 # Each switch's starting value, and what a page assumes before the server says anything. Only
 # `dance` starts off: the other three trigger on something the user did, while `dance` triggers on
 # the media watcher, which cannot tell a song from a talk.
@@ -507,9 +519,201 @@ def showing() -> dict:
     return {"chosen": chosen_model(), "showing": shown}
 
 
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _package_version() -> str:
+    """The version the copies came from, so `zrb-avatar anim` can say what it holds.
+
+    Read from pyproject.toml when it sits beside the package: an editable install keeps the
+    version it was installed at, so its metadata goes stale the moment the version is bumped
+    (and a checkout is exactly where this runs while the package is being worked on).
+    """
+    project = HERE.parent / "pyproject.toml"
+    try:
+        for line in project.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version = "):
+                return line.split('"')[1]
+    except (OSError, IndexError):
+        pass
+    try:
+        return metadata.version("zrb-avatar")
+    except metadata.PackageNotFoundError:
+        return ""
+
+
+def _template() -> dict:
+    """What was copied into the home folder: {"version", "files": {path: sha}, "deleted": [...]}.
+
+    A manifest that is missing or unreadable reads as empty, which makes every file in the
+    folder look like the user's own -- the one failure that keeps a clip instead of replacing
+    it, so nothing is ever overwritten on the strength of a file we could not read.
+    """
+    try:
+        saved = json.loads(TEMPLATE_FILE.read_text(encoding="utf-8"))
+        files = saved["files"]
+        deleted = saved.get("deleted") or []
+        return {
+            "version": str(saved.get("version", "")),
+            "files": {str(k): str(v) for k, v in files.items()},
+            "deleted": {str(rel) for rel in deleted},
+        }
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {"version": "", "files": {}, "deleted": set()}
+
+
+def _write_template(files: dict[str, str], deleted: set[str]) -> None:
+    TEMPLATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    half = TEMPLATE_FILE.with_name(TEMPLATE_FILE.name + ".new")
+    half.write_text(
+        json.dumps(
+            {
+                "version": _package_version(),
+                "files": files,
+                "deleted": sorted(deleted),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    half.replace(TEMPLATE_FILE)
+
+
+def _sync_one(rel: str, shipped: Path, known: dict[str, str], notes: list[str]) -> str | None:
+    """Bring one shipped clip into the home folder; returns the digest to record for it.
+
+    None means "record nothing", and that is how an edited clip is remembered: with no digest
+    on file, no later run can mistake it for untouched and overwrite it.
+    """
+    target = ANIM_HOME / rel
+    want = _digest(shipped)
+    copied = known.get(rel)
+    have = _digest(target) if target.is_file() else None
+    if have is None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(shipped, target)
+        notes.append(f"copied {rel}")
+        return want
+    if copied == have:  # still byte for byte what was copied
+        if have != want:
+            shutil.copy2(shipped, target)
+            notes.append(f"updated {rel}")
+        return want
+    if copied is None and have == want:  # identical to the package: nothing to keep apart
+        return want
+    notes.append(f"kept {rel} (edited)")
+    return None
+
+
+def _retire(shipped: dict[str, Path], known: dict[str, str], restore: bool, notes: list[str]):
+    """Clips the package no longer ships: gone when untouched and `restore`, else kept."""
+    kept: dict[str, str] = {}
+    for rel, copied in sorted(known.items()):
+        if rel in shipped:
+            continue
+        target = ANIM_HOME / rel
+        untouched = target.is_file() and _digest(target) == copied
+        if untouched and restore:
+            target.unlink()
+            notes.append(f"removed {rel} (no longer shipped)")
+        elif untouched:
+            kept[rel] = copied
+            notes.append(f"kept {rel} (no longer shipped; `zrb-avatar anim reset` removes it)")
+        else:
+            notes.append(f"kept {rel} (edited, no longer shipped)")
+    return kept
+
+
+def _skipped(
+    rel: str, target: Path, known: dict, deleted: set[str], restore: bool, notes: list[str]
+) -> bool:
+    """True when a clip is left out of the copy pass, because the user deleted it.
+
+    A clip we copied once and that is now gone was deleted on purpose, so it is recorded as
+    deleted instead of being brought back; a clip the manifest has never seen is copied, which
+    is how a release that adds an animation still delivers it. `restore` is the way back.
+    """
+    if target.is_file():  # back by hand: no longer deleted
+        deleted.discard(rel)
+        return False
+    if restore:
+        deleted.discard(rel)
+        return False
+    if rel in deleted or known.get(rel) is not None:
+        deleted.add(rel)
+        notes.append(f"kept {rel} deleted (bring it back with `zrb-avatar anim reset`)")
+        return True
+    return False
+
+
+def seed_anims(restore: bool = False, source: Path | None = None) -> list[str]:
+    """Copy the shipped clips into the home folder, and keep the copies level with the package.
+
+    The folder is yours: delete a clip, or replace one with an animation of your own. So a copy
+    is replaced only while it is still what was copied, one the manifest does not know is never
+    touched -- a file that predates the manifest may be work of yours -- and one you delete
+    stays deleted.
+
+    `restore` -- `zrb-avatar anim reset` -- puts back the clips you deleted and removes ones
+    that no longer ship, and still keeps every edit. Starting the server only adds and updates.
+    Returns one line per change, for the caller to print.
+    """
+    source = source or SHIPPED_ANIMS
+    shipped = {str(p.relative_to(source)): p for p in source.rglob("*.vrma")}
+    if not shipped:
+        return []
+    template = _template()
+    known, deleted = template["files"], set(template["deleted"])
+    files: dict[str, str] = {}
+    notes: list[str] = []
+    for rel, path in sorted(shipped.items()):
+        if _skipped(rel, ANIM_HOME / rel, known, deleted, restore, notes):
+            continue
+        digest = _sync_one(rel, path, known, notes)
+        if digest is not None:
+            files[rel] = digest
+    files.update(_retire(shipped, known, restore, notes))
+    changed = (
+        files != known
+        or deleted != template["deleted"]
+        or template["version"] != _package_version()
+    )
+    if changed:
+        _write_template(files, deleted)
+    return notes
+
+
+def anim_report() -> list[str]:
+    """What the home folder holds and which clips are the user's own: `zrb-avatar anim`."""
+    if not ANIM_HOME.is_dir():
+        return [f"{ANIM_HOME} does not exist yet; every clip is read from {SHIPPED_ANIMS}"]
+    known = _template()
+    mine, copied = [], []
+    for path in sorted(ANIM_HOME.rglob("*.vrma")):
+        rel = str(path.relative_to(ANIM_HOME))
+        (copied if known["files"].get(rel) == _digest(path) else mine).append(rel)
+    lines = [
+        f"{ANIM_HOME} (copied from {known['version'] or 'an unknown version'})",
+        f"  {len(copied)} as shipped, {len(mine)} your own, {len(known['deleted'])} deleted",
+    ]
+    return (
+        lines
+        + [f"  yours: {rel}" for rel in mine]
+        + [f"  deleted: {rel}" for rel in sorted(known["deleted"])]
+    )
+
+
 def anims() -> dict[str, dict[str, Path]]:
     """pool -> name -> file, for every <pool>/<name>.vrma in ANIM_DIRS, the pool being the folders
-    on the way ("idle", "actions/greetings"); an earlier folder wins, file by file."""
+    on the way ("idle", "actions/greetings"); an earlier folder wins, file by file.
+
+    A clip the manifest records as deleted is left out wherever it is found: the package still
+    ships the copy you deleted, and quietly serving that one would make deleting a clip from
+    the home folder mean nothing."""
+    deleted = _template()["deleted"]
     found: dict[str, dict[str, Path]] = {}
     for folder in reversed(ANIM_DIRS):
         for f in folder.rglob("*.vrma"):
@@ -518,6 +722,7 @@ def anims() -> dict[str, dict[str, Path]]:
                 pool
                 and all(POOL.fullmatch(part) for part in pool)
                 and NAME.fullmatch(f.stem)
+                and "/".join((*pool, f.name)) not in deleted
             ):
                 found.setdefault("/".join(pool), {})[f.stem] = f
     return found
@@ -919,6 +1124,13 @@ class Handler(BaseHTTPRequestHandler):
 def serve(host: str, port: int) -> ThreadingHTTPServer:
     load_autonomy()  # what she agreed to, from the last run
     load_model()  # the model she chose last, from the same run
+    try:
+        notes = seed_anims()  # the shipped clips, into the folder you edit
+    except OSError as e:  # a home that cannot be written must not stop her from starting
+        print(f"animations: left where they were ({e})")
+    else:
+        for note in notes:
+            print(f"animations: {note}")
     return ThreadingHTTPServer((host, port), Handler)
 
 

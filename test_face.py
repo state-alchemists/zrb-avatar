@@ -79,11 +79,79 @@ server.AUTONOMY_FILE = (
 server.MODEL_FILE = (
     user / "model"
 )  # the same: a test must not leave a choice in the real closet
+server.ANIM_HOME = (
+    user / "anim-home"
+)  # where the shipped clips are copied: never the developer's own folder
+server.TEMPLATE_FILE = server.ANIM_HOME / ".template.json"
 server.ANIM_DIRS = [user / "anim", server.HERE / "anim"]
 assert server.anims()["idle"]["rest"].read_bytes() == b"override"
 assert "Idle" in server.anims()["idle"]  # the shipped ones are still there
 assert server.anims()["actions/greetings"]["hi"].read_bytes() == b"hi"
 assert not any(" " in pool for pool in server.anims())
+
+# The shipped clips are copied into the home folder, so the folder you edit is the one that
+# plays. After that a copy follows the package only while it is still what was copied: an
+# edited clip is the user's, and a manifest that is missing or unreadable reads as "all mine".
+pkg = user / "pkg"  # a stand-in for the package's own anim folder
+(pkg / "idle").mkdir(parents=True)
+shipped = {"Idle": b"idle-v1", "Gone": b"gone-v1", "Stale": b"stale-v1", "Untouched": b"u-v1"}
+for name, body in shipped.items():
+    (pkg / "idle" / f"{name}.vrma").write_bytes(body)
+server.ANIM_HOME = user / "seed-test"
+server.TEMPLATE_FILE = server.ANIM_HOME / ".template.json"
+assert server.seed_anims(source=pkg) == [
+    f"copied idle/{name}.vrma" for name in sorted(shipped)
+]
+assert (server.ANIM_HOME / "idle" / "Idle.vrma").read_bytes() == b"idle-v1"
+assert server.seed_anims(source=pkg) == []  # a second start has nothing left to do
+
+(server.ANIM_HOME / "idle" / "Gone.vrma").write_bytes(b"mine")  # the user edits one
+(pkg / "idle" / "Idle.vrma").write_bytes(b"idle-v2")  # the package improves another
+assert server.seed_anims(source=pkg) == [
+    "kept idle/Gone.vrma (edited)",
+    "updated idle/Idle.vrma",
+]
+assert (server.ANIM_HOME / "idle" / "Gone.vrma").read_bytes() == b"mine"  # the edit survives
+assert (server.ANIM_HOME / "idle" / "Idle.vrma").read_bytes() == b"idle-v2"  # the copy follows
+
+# The package drops three names, and how each copy is treated depends on the manifest: an
+# edited copy the manifest still knows is reported and kept, an untouched one is removed, and
+# one whose digest the manifest dropped when the user edited it is simply not ours to touch.
+(server.ANIM_HOME / "idle" / "Stale.vrma").write_bytes(b"mine-too")  # edited, still recorded
+for name in ("Gone", "Stale", "Untouched"):
+    (pkg / "idle" / f"{name}.vrma").unlink()
+assert server.seed_anims(source=pkg, restore=True) == [
+    "kept idle/Stale.vrma (edited, no longer shipped)",
+    "removed idle/Untouched.vrma (no longer shipped)",
+]
+assert (server.ANIM_HOME / "idle" / "Gone.vrma").read_bytes() == b"mine"
+assert (server.ANIM_HOME / "idle" / "Stale.vrma").read_bytes() == b"mine-too"
+assert not (server.ANIM_HOME / "idle" / "Untouched.vrma").exists()
+
+server.TEMPLATE_FILE.unlink()  # a lost manifest must not overwrite anything
+(pkg / "idle" / "Gone.vrma").write_bytes(b"gone-v2")  # the name comes back, different
+assert server.seed_anims(source=pkg) == ["kept idle/Gone.vrma (edited)"]
+assert (server.ANIM_HOME / "idle" / "Gone.vrma").read_bytes() == b"mine"
+
+# A clip you delete stays deleted -- that is how you get rid of one -- and `anim reset` is the
+# way back, without touching the clips you edited.
+(server.ANIM_HOME / "idle" / "Idle.vrma").unlink()
+deleted = "kept idle/Idle.vrma deleted (bring it back with `zrb-avatar anim reset`)"
+assert server.seed_anims(source=pkg) == ["kept idle/Gone.vrma (edited)", deleted]
+assert not (server.ANIM_HOME / "idle" / "Idle.vrma").exists()
+assert server.seed_anims(source=pkg) == ["kept idle/Gone.vrma (edited)", deleted]
+# Deleted is deleted, not "fall back to the copy the package still ships": with the package
+# folder and the home folder both in play, the name is gone from the pools.
+saved_dirs = server.ANIM_DIRS
+server.ANIM_DIRS = [pkg, server.ANIM_HOME]
+assert "Idle" not in server.anims()["idle"]
+server.ANIM_DIRS = saved_dirs
+assert server.seed_anims(source=pkg, restore=True) == [
+    "kept idle/Gone.vrma (edited)",
+    "copied idle/Idle.vrma",
+]
+assert (server.ANIM_HOME / "idle" / "Idle.vrma").read_bytes() == b"idle-v2"
+assert (server.ANIM_HOME / "idle" / "Gone.vrma").read_bytes() == b"mine"
 
 # A white-labeled zrb runs under its own env prefix. The server imports no zrb, so it reads
 # the prefix from zrb's bare bootstrap key `_ZRB_ENV_PREFIX`, the same variable zrb takes its
