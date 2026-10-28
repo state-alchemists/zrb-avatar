@@ -569,7 +569,7 @@ def clips() -> list[dict]:
 
 
 def playable() -> dict[str, dict]:
-    """Every name a clip can be asked for by (`zrb-avatar action`, zrb's FaceAction) -> the clip:
+    """Every name a clip can be asked for by (`zrb-avatar action`, zrb's AvatarAction) -> the clip:
     its full "pool/name", and for an action (pool actions, or nested under it) also the name
     without "actions/" ("wave", "greetings/hi") -- but only where no full name is the same, so
     actions/thinking/idea is "actions/thinking/idea", never the loop clip "thinking/idea".

@@ -1,4 +1,4 @@
-// Her body, moved by zrb itself (FacePose): each hand to a place on her body or in the air, or each
+// Her body, moved by zrb itself (AvatarPose): each hand to a place on her body or in the air, or each
 // joint to an angle (fingers, wrists, elbows, arms, shoulders, spine, head, legs, knees, ankles);
 // on top of whatever clip plays, easing in, held for a few seconds, easing out. The arms reach by
 // two-bone IK, so the places fit any model.
@@ -40,7 +40,7 @@ const FINGERS = {
   point: [1, 0, 1, 1, 1], peace: [1, 0, 0, 1, 1], 'thumbs-up': [0, 1, 1, 1, 1], ok: [0.6, 0.7, 0, 0, 0],
 };
 const FINGER_BONES = ['Thumb', 'Index', 'Middle', 'Ring', 'Little'];
-// Each joint's range, in degrees, as FacePose takes it (README, zrb_init.py).
+// Each joint's range, in degrees, as AvatarPose takes it (README, zrb_init.py).
 const RANGE = {
   knee: [0, 150], ankle: [-40, 60], legForward: [-40, 120], legOut: [-20, 80],
   elbow: [0, 150], armRaise: [0, 180], armForward: [-60, 120], wristBend: [-70, 80], wristTwist: [-90, 90],

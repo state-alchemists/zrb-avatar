@@ -1,5 +1,5 @@
 // The page: loads the model and its clips, wires the server's events to her, and draws her. A
-// new model (FaceModel, `zrb-avatar model`) takes her place in this page: no reload, no download.
+// new model (AvatarModel, `zrb-avatar model`) takes her place in this page: no reload, no download.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
@@ -129,7 +129,7 @@ async function show(name) {
 
 // What this window asks for (?model=<name>, from `zrb-avatar <name>`) outranks the remembered
 // choice: an explicit argument is an instruction for this launch, the file is only a default.
-// Then the model zrb last chose (FaceModel, `zrb-avatar model`); else the first one in the folder.
+// Then the model zrb last chose (AvatarModel, `zrb-avatar model`); else the first one in the folder.
 const asked = params.get('model');
 const chosen = await fetch('model').then(r => r.json()).then(m => m.chosen).catch(() => null);
 const model = asked || chosen || (await fetch('models').then(r => r.json()).catch(() => []))[0];
@@ -142,7 +142,7 @@ if (!model || !await show(model)) {  // say so, even in the app, instead of show
 addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
 addEventListener('wheel', e => { e.preventDefault(); her.framing.onWheel(e); her.view.notice(); }, { passive: false }); // not the page's own zoom
 
-// What the user sees right now, for zrb's FaceLook and `zrb-avatar snapshot`: this frame, from this
+// What the user sees right now, for zrb's AvatarLook and `zrb-avatar snapshot`: this frame, from this
 // camera, at most 768 px, on a dark backdrop where the app is see-through.
 function snapshot(id) {
   renderer.render(scene, camera);

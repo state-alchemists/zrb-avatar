@@ -3,13 +3,16 @@ and (optionally) a companion that speaks first.
 
     export ZRB_INIT_SCRIPTS="$ZRB_INIT_SCRIPTS:$(zrb-avatar init-path)"
 
-Loading this script turns the face on: zrb's state and speech go to face.py. It
+Loading this script turns the face on: zrb's state and speech go to the server
+(server.py, `python -m zrb_avatar serve`). It
 also owns zrb's speech (`enable_speech`), so other init scripts should only set
 the voice (CFG.DEFAULT_LLM_SPEECH_BACKEND / _VOICE), not call `enable_speech`.
-zrb also gets six tools of hers: FaceActions lists her animations by pool with what each looks
-like, FaceAction plays one once, FacePose moves her body itself (hands, head, posture) for a few
-seconds, FaceLook shows her own window as the user sees it, FaceModels lists the avatars (VRM
-models) with the one showing, and FaceModel switches to another.
+zrb also gets nine tools of hers: AvatarActions lists her animations by pool with what each looks
+like, AvatarAction plays one once, AvatarPose moves her body itself (hands, head, posture) for a few
+seconds, AvatarRest lets go of a pose she is holding, AvatarAutonomy reads or changes what she may
+do unasked, AvatarLook shows her own window as the user sees it, AvatarModels lists the avatars (VRM
+models) with the one showing, AvatarModel switches to another, and AvatarStatus reports what the
+ambient line says.
 
 Settings (the prefix follows zrb's CFG.ENV_PREFIX, ZRB by default):
   ZRB_AVATAR_TALK_FIRST        what may start a turn: "idle" (no turn for a while
@@ -19,6 +22,11 @@ Settings (the prefix follows zrb's CFG.ENV_PREFIX, ZRB by default):
                              hips); comma-separated, empty: never
   ZRB_AVATAR_IDLE_MINUTES      quiet minutes before "idle" speaks (45)
   ZRB_AVATAR_COOLDOWN          seconds between turns she starts herself (1200)
+  ZRB_AVATAR_TALK_PROMPT       what a turn she starts asks her to do, after the situation
+                             itself ("Say something short and natural only if it is
+                             worth saying; otherwise reply exactly {nothing_to_say}").
+                             {nothing_to_say} is the one placeholder it reads; an empty
+                             value asks for nothing at all
   ZRB_AVATAR_CAMERA_INTERVAL   seconds between camera looks, with presence "size" (20)
   ZRB_AVATAR_CAMERA_PRESENT_BYTES  photo size above which someone is there (25000)
   ZRB_AVATAR_VIEW_COOLDOWN     seconds between turns "view" starts (30)
@@ -42,7 +50,7 @@ Settings (the prefix follows zrb's CFG.ENV_PREFIX, ZRB by default):
 Knowing is not speaking. The camera, the avatar showing and the music are written down
 whatever ZRB_AVATAR_TALK_FIRST says, and reach every turn as one line of context under "face —"
 (see _ambient_line); a turn she starts is a separate decision, gated as it always was.
-FaceStatus answers the same thing on demand.
+AvatarStatus answers the same thing on demand.
 """
 
 import asyncio
@@ -117,6 +125,13 @@ def _minutes(text: str) -> int:
 TALK_FIRST = {s.strip() for s in _setting("TALK_FIRST", "").split(",") if s.strip()}
 IDLE_MINUTES = float(_setting("IDLE_MINUTES", "45"))
 COOLDOWN_SECONDS = float(_setting("COOLDOWN", "1200"))
+# How a turn she starts is asked for, after the situation it reacts to: the whole instruction,
+# with one placeholder. A white-labeled avatar can ask for another voice, or for none at all.
+TALK_PROMPT = _setting(
+    "TALK_PROMPT",
+    "Say something short and natural only if it is worth saying; "
+    "otherwise reply exactly {nothing_to_say}",
+)
 CAMERA_INTERVAL_SECONDS = float(_setting("CAMERA_INTERVAL", "20"))
 CAMERA_PRESENT_BYTES = int(_setting("CAMERA_PRESENT_BYTES", "25000"))
 VIEW_COOLDOWN_SECONDS = float(_setting("VIEW_COOLDOWN", "30"))
@@ -383,10 +398,11 @@ async def nudge_watch():
 
 def _proactive(text: str, channel: str, attachments: tuple = ()) -> TriggerInput:
     _companion["last_proactive"] = time.monotonic()
+    instruction = TALK_PROMPT.replace("{nothing_to_say}", NOTHING_TO_SAY).strip()
     return TriggerInput(
         text=(
-            f"[{channel}, not typed by the user] {text} Say something short and "
-            f"natural only if it is worth saying; otherwise reply exactly {NOTHING_TO_SAY}"
+            f"[{channel}, not typed by the user] {text}"
+            + (f" {instruction}" if instruction else "")
         ),
         attachments=attachments,
         source=InputProvenance(channel, modality="image" if attachments else "text"),
@@ -632,7 +648,7 @@ async def _sense_loop(turns: asyncio.Queue, watcher: LastInput | None) -> None:
             )
 
 
-def FaceStatus() -> str:
+def AvatarStatus() -> str:
     """What the face reports right now: whether anyone is at the desk (and how that was decided),
     what the user last turned the window's camera to, which avatar is showing, and whether music
     is playing. Read it when you want to know rather than guess; the same line is already put in
@@ -640,15 +656,15 @@ def FaceStatus() -> str:
     return _ambient_line()
 
 
-def FaceActions() -> str:
-    """List the body animations you can play on your avatar with FaceAction, by pool: each one's
+def AvatarActions() -> str:
+    """List the body animations you can play on your avatar with AvatarAction, by pool: each one's
     name, what it looks like and when it fits, and how long it takes. The list is read now, so it
     includes animations the user added since this chat started."""
     found = clips()
     if not found:
         return "No animations are installed."
     lines = [
-        "Pass FaceAction the name as listed: an action by its name (wave, greetings/hi), any other clip "
+        "Pass AvatarAction the name as listed: an action by its name (wave, greetings/hi), any other clip "
         "by pool/name (thinking/idea). The non-action pools also play by themselves: idle when nothing "
         "happens, thinking/tool/attention/speaking in those states, dance while music plays."
     ]
@@ -663,23 +679,23 @@ def FaceActions() -> str:
     return "\n".join(lines)
 
 
-def FaceAction(name: str) -> str:
+def AvatarAction(name: str) -> str:
     """Play a body animation on your avatar once, like a gesture alongside your words (a wave
     hello, a nod, a thumbs-up, a laugh), then she goes back to what she was doing. Use it
-    sparingly, when it fits the moment; FaceActions lists them all with what each looks like.
+    sparingly, when it fits the moment; AvatarActions lists them all with what each looks like.
     """
     found = playable()
     if name not in found:
         actions = [
             n for n, c in found.items() if c["pool"] == "actions" and "/" not in n
         ]
-        return f"No such animation. Actions: {', '.join(actions) or 'none'}. FaceActions lists them all, by pool."
+        return f"No such animation. Actions: {', '.join(actions) or 'none'}. AvatarActions lists them all, by pool."
     clip = found[name]
     send({"type": "action", "value": f"{clip['pool']}/{clip['name']}"})
     return f"Playing {name} ({clip['seconds']} s)."
 
 
-# What FacePose takes; the page (js/pose.js) knows the same names.
+# What AvatarPose takes; the page (js/pose.js) knows the same names.
 POSE_HANDS = (
     "chest",
     "belly",
@@ -699,7 +715,7 @@ POSE_FINGERS = ("open", "relaxed", "fist", "point", "peace", "thumbs-up", "ok")
 Angles = list[float] | None
 
 
-def FacePose(
+def AvatarPose(
     left_hand: str = "",
     right_hand: str = "",
     head: str | list[float] = "",
@@ -749,14 +765,14 @@ def FacePose(
     left_leg / right_leg: [forward, out]: forward -40 (behind) to 120 (thigh raised), out -20 to 80.
     left_knee / right_knee: 0 (straight) to 150 (bent).
     left_ankle / right_ankle: -40 (toes up) to 60 (toes pointed).
-    seconds: how long to hold it, 1 to 30; 0 holds it until FaceRest, so you keep that posture
+    seconds: how long to hold it, 1 to 30; 0 holds it until AvatarRest, so you keep that posture
       instead of borrowing it. Name only the joints that matter: the clip goes on breathing and
       shifting everything else, so a held pose still looks alive. Naming every joint is a statue.
 
     E.g. covering yourself when embarrassed: right_hand="chest", left_hand="hips", head="away",
     body="hunch". Thinking: right_hand="chin", head="tilt-left". A thumbs-up: right_arm=[20, 90],
     right_elbow=90, right_fingers="thumbs-up". Standing on one leg: left_leg=[60, 0], left_knee=90.
-    Use it to act out the moment, alongside your words, when no animation from FaceActions fits.
+    Use it to act out the moment, alongside your words, when no animation from AvatarActions fits.
     """
 
     def bad(value, allowed=(), n=0):
@@ -811,7 +827,7 @@ def FacePose(
     }
     if not moved:
         return "Nothing to move: name at least one hand, joint, head or body."
-    holding = float(seconds) == 0  # 0: keep it, until FaceRest
+    holding = float(seconds) == 0  # 0: keep it, until AvatarRest
     if not holding:
         seconds = max(1.0, min(30.0, float(seconds)))
     camel = lambda name: name.split("_")[0] + "".join(
@@ -821,20 +837,20 @@ def FacePose(
     described = ", ".join(f"{k}: {v}" for k, v in moved.items())
     if holding:
         send({"type": "pose", "hold": True, **sent})
-        return f"Holding {described} until you let go (FaceRest)."
+        return f"Holding {described} until you let go (AvatarRest)."
     send({"type": "pose", "seconds": seconds, **sent})
     return f"Holding {described} for {seconds:g} s."
 
 
-def FaceRest() -> str:
-    """Let go of a pose you are holding (FacePose with seconds=0) and give your body back to the
+def AvatarRest() -> str:
+    """Let go of a pose you are holding (AvatarPose with seconds=0) and give your body back to the
     animations. A timed pose releases itself, so this is only for one you meant to keep.
     """
     send({"type": "pose", "release": True})
     return "Let go: the animations have your body again."
 
 
-def FaceAutonomy(
+def AvatarAutonomy(
     dance: bool | None = None,
     blush: bool | None = None,
     emotion: bool | None = None,
@@ -873,9 +889,9 @@ def FaceAutonomy(
     return said + (f" — but not {', '.join(refused)}." if refused else ".")
 
 
-def FaceModels() -> str:
+def AvatarModels() -> str:
     """List the avatars (VRM models) you can appear as, and say which one is showing now. Use it
-    when the user asks what you can look like, or before FaceModel. The list is read now, so it
+    when the user asks what you can look like, or before AvatarModel. The list is read now, so it
     includes models the user added since this chat started."""
     names, now = ask("models"), ask("model")
     if names is None or now is None:
@@ -890,11 +906,11 @@ def FaceModels() -> str:
         lines.append(
             "No window is open right now; the marked one is what a new window shows."
         )
-    return "Avatars (switch with FaceModel):\n" + "\n".join(lines)
+    return "Avatars (switch with AvatarModel):\n" + "\n".join(lines)
 
 
-def FaceModel(name: str) -> str:
-    """Switch your avatar to another VRM model, by name as FaceModels lists it; every open window
+def AvatarModel(name: str) -> str:
+    """Switch your avatar to another VRM model, by name as AvatarModels lists it; every open window
     changes at once and keeps it until the face server restarts. Use it when the user asks you to
     look different or to change your avatar, not on your own whim."""
     names = ask("models")
@@ -906,7 +922,7 @@ def FaceModel(name: str) -> str:
     return f"Switching to {name}; she changes in a second or two."
 
 
-async def FaceLook():
+async def AvatarLook():
     """See your avatar as the user sees it right now: a picture of your window (your body, pose
     and expression, from the user's side), with what you are doing (state, the animation
     playing, music, emotion). Use it to check how a gesture or your look comes across, or when
@@ -939,15 +955,15 @@ llm_chat.prompt_manager.add_live_context("face", lambda _: _ambient_line())
 # Her own window, animations and avatars: nothing to approve. The actions are read on every call, so
 # ones added while zrb runs work at once.
 for tool in (
-    FaceActions,
-    FaceAction,
-    FacePose,
-    FaceRest,
-    FaceAutonomy,
-    FaceLook,
-    FaceModels,
-    FaceModel,
-    FaceStatus,
+    AvatarActions,
+    AvatarAction,
+    AvatarPose,
+    AvatarRest,
+    AvatarAutonomy,
+    AvatarLook,
+    AvatarModels,
+    AvatarModel,
+    AvatarStatus,
 ):
     llm_chat.append_tool(tool)
     llm_chat.prepend_tool_policy(auto_approve(tool.__name__))

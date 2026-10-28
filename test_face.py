@@ -584,7 +584,7 @@ assert json.loads(get("/model")[1])["chosen"] is None
 server.MODEL_FILE = user / "model"  # back to the test's own file, never the developer's
 server._model["value"] = "yours"  # the state the rest of this file was written against
 face_client.AVATAR_URL, saved = f"http://127.0.0.1:{port}/event", face_client.AVATAR_URL
-try:  # what FaceModels and FaceModel ask
+try:  # what AvatarModels and AvatarModel ask
     assert face_client.ask("models") == ["mine", "yours"]
     # `mine`: the page opened with `?model=mine` is still open, and it stays on what it asked for
     # while `yours` is what is remembered — the two answers are different on purpose.
@@ -737,7 +737,7 @@ try:
 finally:
     server._snapshots.pop("waiting")
 
-# FaceLook's picture: GET /snapshot asks the open window, which answers with a PNG and what she
+# AvatarLook's picture: GET /snapshot asks the open window, which answers with a PNG and what she
 # is doing; a made-up id, a non-PNG or an oversized answer is refused.
 import base64  # noqa: E402
 
@@ -948,7 +948,7 @@ for state in [*states, "dance", "actions"]:
         pool for pool in server.anims().get(state, {})
     ), f"no clip for the {state} pool"
 
-# Every name FacePose (zrb_init.py) offers is one the page (js/pose.js) knows.
+# Every name AvatarPose (zrb_init.py) offers is one the page (js/pose.js) knows.
 tools = (server.HERE / "zrb_init.py").read_text()
 pose_js = (server.HERE / "js" / "pose.js").read_text()
 
@@ -1056,6 +1056,25 @@ finally:
     else:
         os.environ[f"{CFG.ENV_PREFIX}_AVATAR_PRESENCE"] = saved_setting
 
+# What a turn she starts is asked for is a setting too: the default keeps her quiet unless she has
+# something to say, {nothing_to_say} is the one placeholder it reads, and an empty value asks for
+# nothing at all — a white label's own voice, without patching this file.
+saved_prompt = face_zrb.TALK_PROMPT
+try:
+    assert face_zrb._proactive("a turn worth taking", "test").text == (
+        "[test, not typed by the user] a turn worth taking Say something short and natural "
+        f"only if it is worth saying; otherwise reply exactly {face_zrb.NOTHING_TO_SAY}"
+    )
+    face_zrb.TALK_PROMPT = "Only if it matters; else {nothing_to_say}"
+    assert face_zrb._proactive("x", "test").text == (
+        "[test, not typed by the user] x Only if it matters; else "
+        f"{face_zrb.NOTHING_TO_SAY}"
+    )
+    face_zrb.TALK_PROMPT = ""
+    assert face_zrb._proactive("x", "test").text == "[test, not typed by the user] x"
+finally:
+    face_zrb.TALK_PROMPT = saved_prompt
+
 assert face_zrb._ambient_line() == (
     "face — presence: not looked (no watch) · camera: nothing reported yet · "
     "avatar: unknown · music: off"
@@ -1143,7 +1162,7 @@ _presence_over_a_day()
 # A return is announced only for a switch that names it; with none named, no turn.
 assert not face_zrb._worth_saying_back(True, True, 0.0, 10_000.0)
 # The same line, on demand: knowing does not depend on being allowed to speak.
-assert face_zrb.FaceStatus() == face_zrb._ambient_line()
+assert face_zrb.AvatarStatus() == face_zrb._ambient_line()
 # One trigger carries every source, and it is registered whether or not she may speak first.
 assert face_zrb.sense_watch in face_zrb.llm_chat.triggers
 
@@ -1210,21 +1229,21 @@ face_client.AVATAR_URL, saved_lib_url = (
     face_client.AVATAR_URL,
 )
 try:
-    said = face_zrb.FaceAutonomy()
+    said = face_zrb.AvatarAutonomy()
     assert (
         "willing to: blush, emotion, greeting" in said
     )  # dance is off until she says otherwise
     assert "but not dance" in said
-    turned_off = face_zrb.FaceAutonomy(greeting=False)
+    turned_off = face_zrb.AvatarAutonomy(greeting=False)
     assert turned_off.endswith("but not dance, greeting."), turned_off
     assert json.loads(get("/autonomy")[1])["greeting"] is False
     assert face_client.consents("greeting") is False
     assert face_client.consents("dance") is False
-    assert "Each switch is true or false" in face_zrb.FaceAutonomy(
+    assert "Each switch is true or false" in face_zrb.AvatarAutonomy(
         dance="no"
     )  # not half-applied
     assert json.loads(get("/autonomy")[1])["dance"] is False
-    assert "but not greeting" not in face_zrb.FaceAutonomy(greeting=True)
+    assert "but not greeting" not in face_zrb.AvatarAutonomy(greeting=True)
     assert face_client.consents("greeting") is True
     real_send, face_zrb.send = (
         face_zrb.send,
@@ -1232,7 +1251,7 @@ try:
     )  # a server that refuses it
     try:
         # A switch already where it is being sent cannot show a refusal, so this one starts on.
-        assert "did not take greeting" in face_zrb.FaceAutonomy(greeting=False)
+        assert "did not take greeting" in face_zrb.AvatarAutonomy(greeting=False)
     finally:
         face_zrb.send = real_send
     assert face_client.consents("greeting") is True  # and nothing changed
