@@ -93,15 +93,24 @@ export function createFraming(camera, reach, resizeWindow) {
     .reduce(([u, w], [su, sw]) => [Math.max(u, su), Math.max(w, sw)]);
   const { availWidth, availHeight } = screen; // read once: the window's own size must never feed back
   const appScale = resizeWindow && availHeight * 0.45 / (reach.stature / distance * MARGIN);
+  // The caption is the one thing on the screen that is not her, and it can only be as wide as the
+  // window: too narrow a window and a sentence folds into a column that covers half of her. So the
+  // window is never narrower than about thirty-four em of the caption's own 15 px font, which is a
+  // line of forty characters rather than twenty.
+  const CAPTION_WIDTH = 510;
 
   function frame() {
     const scale = (appScale || fit(innerWidth, innerHeight, widest(view))) * view.zoom;
-    const [u, w] = spread(view); // last, as it sets focus and back for the camera
+    // The window must not follow the camera. It is resized around its middle, where she is, so a
+    // window that grew as the camera turned slid her across the screen -- which is all "she moves
+    // when I orbit" ever was. So its height is her reach from every angle, and its width is a
+    // caption line rather than her reach: a sentence has to fit across, not fold down over her.
+    const tall = widest(view)[1];
+    spread(view); // last, as it sets focus and back for the camera
     if (resizeWindow) {
-      // and no wider than 0.8 of her height on screen: arms stretched out fit, a clip that walks
-      // sideways (a dance, the filing cabinet) is cropped for that moment rather than widening it
-      const width = Math.round(Math.max(160, Math.min(availWidth * 0.5, 0.8 * reach.stature / distance * scale, 2 * u * scale)));
-      const height = Math.round(Math.max(160, Math.min(availHeight * 0.85, 2 * w * scale)));
+      // Her widest poses are cropped in that width rather than taking the window over, as before.
+      const width = Math.round(Math.max(160, Math.min(availWidth * 0.5, CAPTION_WIDTH)));
+      const height = Math.round(Math.max(160, Math.min(availHeight * 0.85, 2 * tall * scale)));
       if (Math.abs(width - innerWidth) > 1 || Math.abs(height - innerHeight) > 1) resizeWindow(width, height);
     }
     camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(innerHeight / 2 / scale));
