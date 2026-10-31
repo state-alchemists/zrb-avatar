@@ -160,17 +160,31 @@ function snapshot(id) {
 
 // The sentence she is saying, under her: the client sends {"text"} as the voice starts and
 // {"clear"} as the last chunk is read — which is a little ahead of the ear, because chunks are
-// read ahead of playback. So a line is held for a minimum time, and a clear that never arrives
-// (a crashed turn, a zrb killed mid-sentence) cannot leave it up for ever.
+// read ahead of playback. A clear therefore does not end the line: it says the client is done
+// sending, and the line goes when her mouth stops, which is the one clock on the page that runs
+// with the voice rather than with the sentence's length. A line also has a minimum time, so a
+// two-word one does not blink out, and a long stop, so a clear that never arrives (a crashed
+// turn, a zrb killed mid-sentence) cannot leave it up for ever.
 const subtitleEl = document.getElementById('subtitle');
-let subtitleHold = 0, subtitleTimer = 0, statusText = '', sentenceUp = false;
+let subtitleHold = 0, subtitleTimer = 0, statusText = '', sentenceUp = false, clearPending = false;
 function hideSubtitle() {
   clearTimeout(subtitleTimer);
   subtitleTimer = 0;
   sentenceUp = false;
+  clearPending = false;
   if (statusText) return showStatus();  // the state's line takes the space rather than leaving it blank
   subtitleEl.classList.remove('on', 'status');
   subtitleEl.textContent = '';
+}
+// The mouth queue has drained: the voice has stopped. A clear that arrived while she was still
+// speaking — the usual case, since the client reads ahead — is applied here instead of on the
+// guess, which used to cut a slow sentence off a second or more before its last word.
+function speechEnded() {
+  if (!clearPending || her?.expression.speaking) return;
+  clearPending = false;
+  const left = subtitleHold - Date.now();  // the rest of the minimum time, not zero
+  if (left > 200) subtitleTimer = setTimeout(hideSubtitle, left);
+  else hideSubtitle();
 }
 // A state is not a sentence: it has no hold and no expiry, and it stays up until the state moves.
 function showStatus() {
@@ -186,20 +200,19 @@ function setStatus(text) {
 }
 function showSubtitle(msg) {
   if (msg.clear) {
-    const left = subtitleHold - Date.now();  // the rest of the minimum time, not zero
-    if (left > 200) subtitleTimer = setTimeout(hideSubtitle, left);
-    else hideSubtitle();
-    return;
+    clearPending = true;
+    return speechEnded();
   }
   const text = typeof msg.text === 'string' ? msg.text.trim() : '';
   if (!text) return hideSubtitle();
   subtitleEl.textContent = text;
   sentenceUp = true;
+  clearPending = false;
   subtitleEl.classList.remove('status');
   if (typeof msg.size === 'number' && msg.size > 0) subtitleEl.style.setProperty('--subtitle-size', `${msg.size}px`);
   subtitleEl.classList.add('on');
-  // Readable for about a second and a half plus a twentieth of a second a letter; the long
-  // stop is the safety net, not the plan.
+  // Readable for about a second and a half plus a twentieth of a second a letter — the floor under
+  // a short line, not its lifetime: the line ends with the voice, see speechEnded above.
   const hold = Math.max(1600, text.length * 55);
   subtitleHold = Date.now() + hold;
   clearTimeout(subtitleTimer);
@@ -281,6 +294,7 @@ renderer.setAnimationLoop(() => {
   const { vrm, mixer, expression, pose, blush } = her;
   if (expression.speaking && state === 'idle') setState('speaking');
   if (!expression.speaking && state === 'speaking') setState('idle');
+  if (!expression.speaking) speechEnded(); // the voice just stopped: a pending clear takes effect here
   expression.pose(dt, state, () => { mixer.update(dt); pose.apply(dt); });
   vrm.update(dt);
   blush.update(dt);

@@ -17,8 +17,8 @@
   html.app #status { display: none; }
   html.app #status.error { display: block; color: #f46; opacity: 1; }
   /* What she is saying: under her, over the status line, gone when the voice stops. The client
-     sends a clear as the audio is read, so a line is held for a minimum time rather than
-     blinking out between chunks — see js/main.js showSubtitle. */
+     sends a clear as the audio is read, ahead of the ear, so the line is ended by the mouth
+     rather than by the clear — see js/main.js speechEnded. */
   #subtitle {
     position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
     max-width: min(92%, 40em); padding: 6px 12px; border-radius: 9px;
