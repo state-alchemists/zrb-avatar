@@ -60,6 +60,28 @@ assert (
     <= MOUTH_STEP
 )
 
+# The caption: the sentence goes out as the voice starts and is cleared once the last chunk has
+# been read. The page holds a line for a minimum time, because this clear runs ahead of the ear.
+spoken, face_send = [], face_client.send
+face_client.send = spoken.append
+try:
+    captioned = face_client.with_mouth(_Streamed(), "Good morning, Go.")
+    assert len(list(captioned.chunks)) == 10
+finally:
+    face_client.send = face_send
+assert spoken[0] == {"type": "subtitle", "text": "Good morning, Go."}
+assert spoken[-1] == {"type": "subtitle", "clear": True}
+assert sum(m["type"] == "mouth" for m in spoken) == 11  # the mouth is unchanged by the caption
+# ZRB_AVATAR_SUBTITLE=off: the same audio, no caption at all.
+quiet, face_send, subtitle_on = [], face_client.send, face_client.SUBTITLE
+face_client.send, face_client.SUBTITLE = quiet.append, False
+try:
+    uncaptioned = face_client.with_mouth(_Streamed(), "not captioned")
+    assert len(list(uncaptioned.chunks)) == 10
+finally:
+    face_client.send, face_client.SUBTITLE = face_send, subtitle_on
+assert not any(m["type"] == "subtitle" for m in quiet)
+
 # Search paths: a user folder adds models and animations, and overrides shipped ones by name.
 user = Path(tempfile.mkdtemp())
 (user / "models").mkdir()
@@ -676,21 +698,34 @@ assert next_event(again_stream) == {
     "value": "idle",
 }  # no model in between
 # A view is kept for zrb, counted, and not relayed to the pages (the next event they get is the state).
-assert json.loads(get("/view")[1]) == {"n": 0}
-assert (
-    post_event('{"type":"view","part":"chest","side":"front","close":true,"shy":true}')
-    == 204
-)
-assert json.loads(get("/view")[1]) == {
-    "type": "view",
-    "part": "chest",
-    "side": "front",
-    "close": True,
-    "shy": True,
-    "n": 1,
-}
-assert post_event('{"type":"state","value":"tool"}') == 204
-assert next_event(again_stream) == {"type": "state", "value": "tool"}
+# The reflex is pinned off for it rather than assumed: with ZRB_AVATAR_REFLEX=on in the shell (Go's
+# is), a shy view is answered with her covering pose, and that pose -- not the state -- would be next.
+reflex = server.REFLEX
+server.REFLEX = False
+try:
+    assert json.loads(get("/view")[1]) == {"n": 0}
+    assert (
+        post_event('{"type":"view","part":"chest","side":"front","close":true,"shy":true}')
+        == 204
+    )
+    assert json.loads(get("/view")[1]) == {
+        "type": "view",
+        "part": "chest",
+        "side": "front",
+        "close": True,
+        "shy": True,
+        "n": 1,
+    }
+    assert post_event('{"type":"state","value":"tool"}') == 204
+    assert next_event(again_stream) == {"type": "state", "value": "tool"}
+finally:
+    server.REFLEX = reflex
+
+# A blink she chose is relayed and forgotten, like a pose: a page that reloads does not start with
+# her eyes shut for a blink that has already happened.
+assert post_event('{"type":"blink","eyes":"right","seconds":0.3}') == 204
+assert next_event(again_stream) == {"type": "blink", "eyes": "right", "seconds": 0.3}
+assert server._pose == {}
 
 # Actions are listed with what each looks like, through the same cascade: the user's own
 # actions/wave.vrma (no description) is there, and the shipped ones fill in, described.
@@ -998,8 +1033,7 @@ assert pools == [
     "idle",
     "speaking",
     "thinking",
-    "tool",
-], pools
+], pools  # no `tool/`: nothing captured fits a task being run, so that state loops the idles
 for pool in pools:
     files = sorted((anim / pool).glob("*.vrma"))
     assert files, f"nothing to play in anim/{pool}"
@@ -1008,13 +1042,13 @@ for pool in pools:
 
 server.ANIM_DIRS = [server.HERE / "anim"]
 
-# Every state the page shows has a pool.
+# Every state the page shows has either its own pool or the idles to fall back to: `tool` has none
+# (nothing captured fits a task being run), and motion.js loops `idle` for a pool with no clip in it.
 page = (server.HERE / "js" / "main.js").read_text()
 states = re.findall(r"(\w+)\s*:", re.search(r"const LOOK = \{(.*?)\}", page).group(1))
 for state in [*states, "dance", "actions"]:
-    assert any(
-        pool for pool in server.anims().get(state, {})
-    ), f"no clip for the {state} pool"
+    have = server.anims()
+    assert any(have.get(state, {}) or have.get("idle", {})), f"no clip for the {state} pool"
 
 # Every name AvatarPose (zrb_init.py) offers is one the page (js/pose.js) knows.
 tools = (server.HERE / "zrb_init.py").read_text()
@@ -1108,6 +1142,78 @@ asyncio.run(_a_reading_goes_stale_rather_than_false())
 # music down whatever ZRB_AVATAR_TALK_FIRST says, and one line of it goes in front of every turn.
 # This needs zrb, which the stdlib-only checks above do not, so it comes last.
 import zrb_avatar.zrb_init as face_zrb  # noqa: E402
+
+# A blink she chose, through the tool: the event the page holds for that long, what it takes, and
+# what it says back. The automatic blink is the page's own and needs no tool; this is the one that
+# is a gesture. Nothing here is remembered: a blink that arrived while a page reloaded has happened.
+sent, real_send = [], face_zrb.send
+face_zrb.send = sent.append
+try:
+    assert face_zrb.AvatarBlink() == "Blinked for 0.2 s."
+    assert sent[-1] == {"type": "blink", "eyes": "both", "seconds": 0.2}
+    assert face_zrb.AvatarBlink(eyes="right", seconds=0.5) == (
+        "Winked with the right eye (0.5 s)."
+    )
+    assert sent[-1] == {"type": "blink", "eyes": "right", "seconds": 0.5}
+    assert face_zrb.AvatarBlink(eyes=" Right ") == "Winked with the right eye (0.2 s)."
+    assert sent[-1]["eyes"] == "right"  # as typed: trimmed, and one case
+    # A length a lid cannot mean is pinned to the ends rather than sent as asked.
+    assert face_zrb.AvatarBlink(seconds=60) == "Blinked for 2 s."
+    assert sent[-1]["seconds"] == 2.0
+    assert face_zrb.AvatarBlink(seconds=0) == "Blinked for 0.08 s."
+    # And a name or a length it cannot make sense of is refused, not guessed at.
+    sent.clear()
+    assert face_zrb.AvatarBlink(eyes="wink").startswith(
+        "eyes must be one of both, left, right"
+    )
+    assert face_zrb.AvatarBlink(seconds="slow").startswith("seconds must be a number")
+    assert face_zrb.AvatarBlink(seconds=True).startswith("seconds must be a number")
+    assert sent == []  # nothing went out for any of them
+finally:
+    face_zrb.send = real_send
+
+# A feeling on purpose: the same emotion event zrb already sends, so the page believes nothing new,
+# plus the one word for how hard it is worn. `pout` and the other four blends are in the list
+# although no model carries them as shapes — each is two presets at once.
+sent, real_send = [], face_zrb.send
+face_zrb.send = sent.append
+try:
+    assert face_zrb.AvatarFace() == "pout, normal, fading after six seconds."
+    assert sent[-1] == {"type": "emotion", "value": "pout", "strength": 1.0}
+    assert face_zrb.AvatarFace(" Angry ") == "angry, normal, fading after six seconds."
+    assert sent[-1] == {"type": "emotion", "value": "angry", "strength": 1.0}
+    # Strength is one word, never a number: the dial is what the page refuses to be handed.
+    assert face_zrb.AvatarFace("smirk", "soft") == "smirk, soft, fading after six seconds."
+    assert sent[-1]["strength"] == 0.5
+    assert face_zrb.AvatarFace("sleepy", "STRONG") == "sleepy, strong, fading after six seconds."
+    assert sent[-1]["strength"] == 1.5
+    assert face_zrb.AvatarFace("smug").startswith("emotion must be one of happy")
+    assert face_zrb.AvatarFace("pout", "hard").startswith("strength must be one of soft")
+    assert len(sent) == 4  # neither refusal sent anything
+finally:
+    face_zrb.send = real_send
+
+# The faces and the strengths the tool offers are exactly the ones the page knows: a name in one
+# list and not in the other is a call that answers "pout" and changes nothing on screen.
+faces_js = (server.HERE / "js" / "expression.js").read_text()
+presets_js = re.findall(
+    r"'(\w+)'", re.search(r"const EMOTIONS = \[(.*?)\]", faces_js).group(1)
+)
+blends_js = re.findall(
+    r"(\w+): \{", re.search(r"const BLENDS = \{(.*?)\n\};", faces_js, re.S).group(1)
+)
+assert [*face_zrb.FACES] == [*presets_js, *blends_js], (
+    face_zrb.FACES,
+    presets_js,
+    blends_js,
+)
+strengths_js = re.findall(
+    r"(\w+): [\d.]+", re.search(r"const STRENGTHS = \{(.*?)\};", faces_js).group(1)
+)
+assert [*face_zrb.FACE_STRENGTHS] == strengths_js, (
+    face_zrb.FACE_STRENGTHS,
+    strengths_js,
+)
 
 # The init spells the same noun the server does: <PREFIX>_AVATAR_*, never the retired _FACE_.
 from zrb.config.config import CFG  # noqa: E402

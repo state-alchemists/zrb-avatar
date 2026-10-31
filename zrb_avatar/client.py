@@ -21,6 +21,14 @@ AVATAR_URL = os.getenv(
 MOUTH_STEP = 0.04  # seconds of audio per mouth value
 # Calibration knob: raise it if the mouth barely opens, lower it if it never closes.
 MOUTH_GAIN = float(os.getenv(f"{CFG.ENV_PREFIX}_AVATAR_MOUTH_GAIN", "4"))
+# Captions under her: the sentence being spoken, in the window. Off for a machine on a shared
+# desk, or for anyone who would rather read in zrb's own terminal.
+SUBTITLE = os.getenv(f"{CFG.ENV_PREFIX}_AVATAR_SUBTITLE", "on").strip().lower() not in (
+    "off",
+    "0",
+    "false",
+    "no",
+)
 
 
 def send(message: dict) -> None:
@@ -115,11 +123,17 @@ def loudness(pcm: bytes, sample_rate: int) -> list[float]:
     return [*mouth.feed(pcm), *mouth.flush()]
 
 
-def with_mouth(audio):
-    """*audio* (a SpeechAudio or None) whose chunks also move the mouth.
+def with_mouth(audio, text: str = ""):
+    """*audio* (a SpeechAudio or None) whose chunks also move the mouth and caption the line.
 
     Every value is one step of the audio, so the page, playing one value per
     step, ends the mouth with the voice.
+
+    *text* is the sentence being spoken: it goes to the window as a subtitle when
+    the player pulls the first chunk, and is cleared when the last one has been
+    read. The clear therefore arrives a little before the ear reaches the end
+    (chunks are read ahead of playback, as below), which is why the page holds a
+    line for a minimum time rather than clearing it the instant the event lands.
 
     ponytail: chunks are read ahead of playback, so the mouth starts a little
     early; the page plays values at real speed, so it doesn't drift. Exact fix
@@ -128,13 +142,18 @@ def with_mouth(audio):
     if audio is None:
         return None
     chunks, mouth = audio.chunks, Mouth(audio.sample_rate)
+    said = text.strip() if SUBTITLE else ""
 
     def moving():
+        if said:
+            send({"type": "subtitle", "text": said})
         for chunk in chunks:
             send({"type": "mouth", "values": mouth.feed(chunk), "step": MOUTH_STEP})
             yield chunk
         if tail := mouth.flush():
             send({"type": "mouth", "values": tail, "step": MOUTH_STEP})
+        if said:
+            send({"type": "subtitle", "clear": True})
 
     audio.chunks = moving()
     return audio
@@ -180,6 +199,25 @@ def face_hooks(hooks) -> None:
         "idle": [HookEvent.STOP, HookEvent.STOP_FAILURE, HookEvent.SESSION_START],
     }.items():
         hooks.add_hook(to(state), events=events)
+
+    # The approval wait has its own end. Without this, the "attention" state that
+    # PermissionRequest sets stays until the tool finishes — PostToolUse fires at execution, not
+    # approval — so she holds the asking-for-permission posture for the whole call. Older zrb has
+    # no such event, and then nothing here changes.
+    resolved = getattr(HookEvent, "PERMISSION_RESOLVED", None)
+    if resolved is not None:
+
+        async def answered(context):
+            data = getattr(context, "event_data", None)
+            approved = data.get("approved") if isinstance(data, dict) else None
+            if approved is None:  # nobody answered: whatever happens next sets the state
+                return HookResult()
+            await asyncio.to_thread(
+                send, {"type": "state", "value": "tool" if approved else "thinking"}
+            )
+            return HookResult()
+
+        hooks.add_hook(answered, events=[resolved])
 
     # zrb's Emotion hook (ZRB_LLM_EMOTION_ENABLED): a VRM preset name, from the user's
     # prompt or zrb's reply. Older zrb has no such event.

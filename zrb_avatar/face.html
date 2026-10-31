@@ -16,6 +16,18 @@
   #status { position: fixed; bottom: 8px; width: 100%; text-align: center; color: var(--glow); font: 12px monospace; opacity: .7; }
   html.app #status { display: none; }
   html.app #status.error { display: block; color: #f46; opacity: 1; }
+  /* What she is saying: under her, over the status line, gone when the voice stops. The client
+     sends a clear as the audio is read, so a line is held for a minimum time rather than
+     blinking out between chunks — see js/main.js showSubtitle. */
+  #subtitle {
+    position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
+    max-width: min(88%, 40em); padding: 6px 12px; border-radius: 9px;
+    background: rgba(9, 11, 18, .74); color: #eaf6ff;
+    font: var(--subtitle-size, 15px)/1.35 system-ui, -apple-system, sans-serif;
+    text-align: center; opacity: 0; transition: opacity .16s ease-out;
+    pointer-events: none; /* the window is dragged by her body, never by a caption */
+  }
+  #subtitle.on { opacity: 1; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -27,6 +39,7 @@
 </script>
 </head>
 <body>
+<div id="subtitle"></div>
 <div id="status">loading…</div>
 <script type="module" src="js/main.js"></script>
 </body>

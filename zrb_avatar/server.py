@@ -20,6 +20,9 @@ asked: {"dance": bool, "blush": bool, "emotion": bool, "greeting": bool}. A {"ty
 "value": {"dance": false}} event sets any of them and is written to <home>/autonomy.json, so a
 restart does not quietly undo it; a switch she has never touched sits at its default — `dance` off,
 the rest on (see AUTONOMY_DEFAULTS).
+A {"type": "blink", "eyes": "both"|"left"|"right", "seconds": 0.2} event is a blink she chose; it is
+relayed like a pose and not remembered, because a blink that arrived while a page was reloading has
+already happened.
 Stdlib only; run with `python3 server.py` or `zrb-avatar serve`, then open http://localhost:7777.
 
 Models and animations are looked up in folders, the first match winning:
