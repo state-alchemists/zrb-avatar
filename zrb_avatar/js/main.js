@@ -158,6 +158,38 @@ function snapshot(id) {
     .catch(() => {});
 }
 
+// The sentence she is saying, under her: the client sends {"text"} as the voice starts and
+// {"clear"} as the last chunk is read — which is a little ahead of the ear, because chunks are
+// read ahead of playback. So a line is held for a minimum time, and a clear that never arrives
+// (a crashed turn, a zrb killed mid-sentence) cannot leave it up for ever.
+const subtitleEl = document.getElementById('subtitle');
+let subtitleHold = 0, subtitleTimer = 0;
+function hideSubtitle() {
+  clearTimeout(subtitleTimer);
+  subtitleTimer = 0;
+  subtitleEl.classList.remove('on');
+  subtitleEl.textContent = '';
+}
+function showSubtitle(msg) {
+  if (msg.clear) {
+    const left = subtitleHold - Date.now();  // the rest of the minimum time, not zero
+    if (left > 200) subtitleTimer = setTimeout(hideSubtitle, left);
+    else hideSubtitle();
+    return;
+  }
+  const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+  if (!text) return hideSubtitle();
+  subtitleEl.textContent = text;
+  if (typeof msg.size === 'number' && msg.size > 0) subtitleEl.style.setProperty('--subtitle-size', `${msg.size}px`);
+  subtitleEl.classList.add('on');
+  // Readable for about a second and a half plus a twentieth of a second a letter; the long
+  // stop is the safety net, not the plan.
+  const hold = Math.max(1600, text.length * 55);
+  subtitleHold = Date.now() + hold;
+  clearTimeout(subtitleTimer);
+  subtitleTimer = setTimeout(hideSubtitle, hold + 12000);
+}
+
 function onEvent({ data }) {
   const msg = JSON.parse(data);
   if (msg.type === 'state') {
@@ -165,6 +197,8 @@ function onEvent({ data }) {
     setState(msg.value);
   } else if (msg.type === 'mouth') {
     her.expression.speak(msg.values, msg.step);
+  } else if (msg.type === 'subtitle') {
+    showSubtitle(msg);
   } else if (msg.type === 'action' && clipByName(her.clips, msg.value)) {
     her.motion.act(clipByName(her.clips, msg.value));
   } else if (msg.type === 'model' && typeof msg.value === 'string' && msg.value !== her.name) {
@@ -172,6 +206,8 @@ function onEvent({ data }) {
     fetch('models').then(r => r.json()).then(names => { if (names.includes(msg.value)) show(msg.value); }).catch(() => {});
   } else if (msg.type === 'pose') {
     msg.release ? her.pose.release() : her.pose.set(msg);
+  } else if (msg.type === 'blink') {
+    her.expression.blinkNow(msg.eyes, msg.seconds); // one she chose: a wink, or a slow one
   } else if (msg.type === 'music') {
     music = !!msg.value;
     followState();
@@ -185,7 +221,7 @@ function onEvent({ data }) {
     followState();
   } else if (msg.type === 'emotion' && msg.source !== 'user' && autonomy.emotion) {
     // Hers only: she answers the user's tone in her reply, which carries its own emotion.
-    her.expression.show(msg.value);
+    her.expression.show(msg.value, msg.strength);
     if (her.clips.actions?.[msg.value] && !her.motion.acting) her.motion.act(clipByName(her.clips, msg.value));
   }
 }

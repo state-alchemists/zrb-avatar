@@ -7,10 +7,11 @@ Loading this script turns the face on: zrb's state and speech go to the server
 (server.py, `python -m zrb_avatar serve`). It
 also owns zrb's speech (`enable_speech`), so other init scripts should only set
 the voice (CFG.DEFAULT_LLM_SPEECH_BACKEND / _VOICE), not call `enable_speech`.
-zrb also gets nine tools of hers: AvatarListActions lists her animations by pool with what each looks
-like, AvatarAction plays one once, AvatarPose moves her body itself (hands, head, posture) for a few
-seconds, AvatarRest lets go of a pose she is holding, AvatarAutonomy reads or changes what she may
-do unasked, AvatarLook shows her own window as the user sees it, AvatarListModels lists the avatars (VRM
+zrb also gets eleven tools of hers: AvatarListActions lists her animations by pool with what each
+looks like, AvatarAction plays one once, AvatarPose moves her body itself (hands, head, posture) for a
+few seconds, AvatarRest lets go of a pose she is holding, AvatarBlink blinks or winks deliberately,
+AvatarFace puts a feeling on her face on purpose, AvatarAutonomy reads or changes what she may do
+unasked, AvatarLook shows her own window as the user sees it, AvatarListModels lists the avatars (VRM
 models) with the one showing, AvatarModel switches to another, and AvatarStatus reports what the
 ambient line says.
 
@@ -231,7 +232,7 @@ class QuietSpeech(AnySpeechBackend):
     def create_audio(self, text: str):
         if text.strip() in (NOTHING_TO_SAY, ".", "..."):
             return SpeechAudio(16000, [])
-        return with_mouth(self.inner.create_audio(text))
+        return with_mouth(self.inner.create_audio(text), text)
 
     @property
     def needs_zrb_playback(self) -> bool:
@@ -850,6 +851,75 @@ def AvatarRest() -> str:
     return "Let go: the animations have your body again."
 
 
+# What AvatarBlink takes; the page (js/expression.js) knows the same names.
+BLINK_EYES = ("both", "left", "right")
+BLINK_SECONDS = (0.08, 2.0)
+
+
+def AvatarBlink(eyes: str = "both", seconds: float = 0.2) -> str:
+    """Blink deliberately: one quick blink, a slow one that says "I heard you", or a wink. She
+    closes her eyes for that long and then her face goes back to blinking on its own — this is
+    not the blink she already does every few seconds, it is the one that means something. Use it
+    where the blink is the point, not as punctuation.
+
+    eyes: "both" (a blink), "left" or "right" (a wink). seconds: 0.08 to 2; a natural blink is
+    about a fifth of a second, and half a second or more is deliberate. A model without a
+    separate left or right blink shape winks with both eyes rather than holding one lid down.
+    """
+    eyes = (eyes or "both").strip().lower()
+    if eyes not in BLINK_EYES:
+        return f"eyes must be one of {', '.join(BLINK_EYES)}; got {eyes!r}."
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        return f"seconds must be a number; got {seconds!r}."
+    seconds = max(BLINK_SECONDS[0], min(BLINK_SECONDS[1], float(seconds)))
+    send({"type": "blink", "eyes": eyes, "seconds": seconds})
+    if eyes == "both":
+        return f"Blinked for {seconds:g} s."
+    return f"Winked with the {eyes} eye ({seconds:g} s)."
+
+
+# What AvatarFace takes; the page (js/expression.js) knows the same names and the same strengths.
+FACES = (
+    "happy",
+    "sad",
+    "angry",
+    "surprised",
+    "relaxed",
+    "pout",
+    "smirk",
+    "worried",
+    "delighted",
+    "sleepy",
+)
+FACE_STRENGTHS = {"soft": 0.5, "normal": 1.0, "strong": 1.5}
+
+
+def AvatarFace(emotion: str = "pout", strength: str = "normal") -> str:
+    """Put a feeling on her face for about six seconds, then let it fade. The five VRM presets are
+    `happy`, `sad`, `angry`, `surprised` and `relaxed`; the five blends are faces no model carries as
+    a shape, made of two presets at once:
+
+      pout       angry + sad        a sulk, mouth pinched small
+      smirk      happy + angry     pleased with herself, one corner up
+      worried    sad + surprised   the mouth corners down, the eyes a little wider
+      delighted  happy + surprised the smile that also opens the eyes
+      sleepy     relaxed + sad     lids down, a soft mouth; quiet and tired
+
+    `strength` says how hard it is worn: `soft` (half), `normal` or `strong` (one and a half). Use
+    it when the face *is* the sentence — pouting, being teased, a mock scowl — not as punctuation on
+    every reply: the emotion zrb shows for your replies needs no call. A model that lacks one of a
+    blend's two halves shows the half it has.
+    """
+    emotion = (emotion or "pout").strip().lower()
+    if emotion not in FACES:
+        return f"emotion must be one of {', '.join(FACES)}; got {emotion!r}."
+    strength = (strength or "normal").strip().lower()
+    if strength not in FACE_STRENGTHS:
+        return f"strength must be one of {', '.join(FACE_STRENGTHS)}; got {strength!r}."
+    send({"type": "emotion", "value": emotion, "strength": FACE_STRENGTHS[strength]})
+    return f"{emotion}, {strength}, fading after six seconds."
+
+
 def AvatarAutonomy(
     dance: bool | None = None,
     blush: bool | None = None,
@@ -959,6 +1029,8 @@ for tool in (
     AvatarAction,
     AvatarPose,
     AvatarRest,
+    AvatarBlink,
+    AvatarFace,
     AvatarAutonomy,
     AvatarLook,
     AvatarListModels,
