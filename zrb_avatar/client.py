@@ -29,6 +29,15 @@ SUBTITLE = os.getenv(f"{CFG.ENV_PREFIX}_AVATAR_SUBTITLE", "on").strip().lower() 
     "false",
     "no",
 )
+# The caption's other half: while she is not speaking, the line says what she is doing instead
+# of going blank, which is what a long tool call would otherwise leave you looking at. A state
+# missing from this table has nothing to say, and clears the line — idle among them.
+STATUS = {
+    "thinking": "(thinking…)",
+    "tool": "(working…)",
+    "attention": "(needs you…)",
+    "permission": "(waiting for your answer…)",
+}
 
 
 def send(message: dict) -> None:
@@ -171,19 +180,28 @@ def _resumes_conversation(context) -> bool:
 
 
 def face_hooks(hooks) -> None:
-    """Register hooks that send idle/thinking/tool/attention, and zrb's emotions, to the face."""
+    """Register hooks that send idle/thinking/tool/attention/permission, and zrb's emotions, to the face."""
     from zrb.llm.hook.interface import HookResult
     from zrb.llm.hook.types import HookEvent
 
     def to(state: str):
         async def hook(context):
             await asyncio.to_thread(send, {"type": "state", "value": state})
+            if SUBTITLE:
+                # The state is also the caption: the page puts it up once the sentence on screen
+                # has gone, so the long silences of a tool call still say what is happening.
+                await asyncio.to_thread(
+                    send, {"type": "status", "text": STATUS.get(state, "")}
+                )
             if (
                 context.event == HookEvent.SESSION_START
                 and not _resumes_conversation(context)
                 and await asyncio.to_thread(consents, "greeting")
             ):
-                await asyncio.to_thread(send, {"type": "action", "value": "Greeting"})
+                # The pool, not a file name: `greeting/` is a folder of your own clips, and the page
+                # plays one of them at random. `actions/Greeting.vrma` still works, as the fallback
+                # the README used to ask for.
+                await asyncio.to_thread(send, {"type": "action", "value": "greeting"})
             return HookResult()
 
         return hook
@@ -195,12 +213,13 @@ def face_hooks(hooks) -> None:
             HookEvent.POST_TOOL_USE_FAILURE,
         ],
         "tool": [HookEvent.PRE_TOOL_USE],
-        "attention": [HookEvent.NOTIFICATION, HookEvent.PERMISSION_REQUEST],
+        "attention": [HookEvent.NOTIFICATION],
+        "permission": [HookEvent.PERMISSION_REQUEST],
         "idle": [HookEvent.STOP, HookEvent.STOP_FAILURE, HookEvent.SESSION_START],
     }.items():
         hooks.add_hook(to(state), events=events)
 
-    # The approval wait has its own end. Without this, the "attention" state that
+    # The approval wait has its own end. Without this, the "permission" state that
     # PermissionRequest sets stays until the tool finishes — PostToolUse fires at execution, not
     # approval — so she holds the asking-for-permission posture for the whole call. Older zrb has
     # no such event, and then nothing here changes.

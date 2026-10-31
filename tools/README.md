@@ -12,6 +12,7 @@ an animation folder (`~/.zrb/avatar/anim/<pool>/<name>.vrma`).
 | `bvh2vrma.mjs` | a `.bvh` capture | `npm install` here (three) |
 | `headlift.mjs` | a `.vrma` whose head is carried too far forward, and how many degrees to lift it | nothing |
 | `restance.py` | a `.vrma` standing wider than it should | `npm install` here (three + three-vrm-animation) |
+| `floor.py` | one or more `.vrma`, and the height the library stands at | `npm install` here (three + three-vrm-animation) |
 | `vrma-info.mjs` | any `.vrma` — says what a loader makes of it | `npm install` here (three + three-vrm-animation) |
 | `author-vrma.py` | a base pose, and the names of the ambient clips to write | python 3, nothing else |
 | `author-actions.py` | the same base pose, and the names of the gestures to write | python 3, nothing else |
@@ -56,24 +57,34 @@ skewed by however far that frame leans — see the note at the top of `bvh2vrma.
 100STYLE's rig is spelled out in that file (`STYLE100`) instead of matched by name, because
 it uses "shoulder" for the upper arm and "hip" for the thigh.
 
-## headlift.mjs, restance.py, and the probes
+## headlift.mjs, restance.py, floor.py, and the probes
 
 ```bash
 node headlift.mjs in.vrma out.vrma -12 [--head-only]   # degrees; positive bows the head
 python3 restance.py in.vrma out.vrma [--width 22.3] [--drift]
+python3 floor.py --target 8.3 in.vrma [in.vrma ...]     # --report to measure only
 ```
 
-Both apply one constant to a captured clip rather than re-animating it: `headlift` turns the
-neck and head so a capture that was recorded looking down looks at you, and `restance` turns
-the thighs so a capture that stands too wide stands under her, lifting the hips by what the
-knees took up. Neither is a fix for a pose that is wrong in motion — a constant correction
-turns travelling feet into sliding feet, which is what `restance --drift` prints.
+All three apply one constant to a captured clip rather than re-animating it: `headlift` turns the
+neck and head so a capture that was recorded looking down looks at you, `restance` turns the
+thighs so a capture that stands too wide stands under her, lifting the hips by what the knees took
+up, and `floor.py` moves the hips straight up or down so her feet reach the height the rest of the
+library stands at. None is a fix for a pose that is wrong in motion — a constant correction turns
+travelling feet into sliding feet, which is what `restance --drift` prints.
+
+`floor.py` is the one that is run over the whole library, because height is the one thing every
+source disagrees about. Two of them disagree about the axis as well: `gltf2vrma.py` puts the
+body's height in **z** and `bvh2vrma.mjs` in **y**, so the tool reads the axis off each file's
+hips node instead of assuming one, applies the shift, measures again, and repeats until nothing is
+left. Point it at a folder of candidates and everything in there stands where the shipped clips
+stand.
 
 The `_*.mjs` files answer one question each and print it, for judging a clip before shipping
-it: `_feet.mjs` where the feet are and how far they travel, `_hands.mjs` how high a hand gets
-and when (a "waving" clip whose hands peak at chest height is not waving), `_crosscheck.mjs`
-whether a converted clip stands where its source stands, `headpitch.mjs` how far forward the
-head is carried in the source itself.
+it: `_feet.mjs` where the feet are, how far they travel, and — at the end of each clip's block —
+the world height the lowest foot reaches, which is the number `floor.py` reads. `_hands.mjs` says
+how high a hand gets and when (a "waving" clip whose hands peak at chest height is not waving),
+`_crosscheck.mjs` whether a converted clip stands where its source stands, `headpitch.mjs` how far
+forward the head is carried in the source itself.
 
 ## author-vrma.py and author-actions.py
 

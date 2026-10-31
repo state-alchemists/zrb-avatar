@@ -227,11 +227,20 @@ export function convert(bvh, description = '', verbose = false, range = null) {
       // The hips carry the capture's whole trajectory, and in a 100STYLE file that is a couple
       // of hundred centimetres into the scene: written as it stands, she arrives that far from
       // where the window is looking. What the clip needs is the motion from where it starts --
-      // the sway, the step, the drop -- so the first sample becomes the origin.
+      // the sway, the step, the drop -- so the first sample becomes the origin **horizontally**.
+      //
+      // Not vertically. This track is absolute, not a delta: whatever it says on a frame is where
+      // the hips are. Re-basing the up component to zero therefore declares her hips to be on the
+      // floor, and every clip came out a metre underground -- with her legs through it. The whole
+      // 100STYLE set was converted that way, and it could not be seen in any render, because every
+      // camera in the harness was placed relative to her. The up component is kept as the capture
+      // gave it; `floor.py` then puts the result on the library's floor.
       const start = [values[0], values[1], values[2]];
+      const up = 1;
       tracks.push({
         node: index[node.name], path: 'translation', times, type: 'VEC3',
-        values: Float32Array.from(values, (v, i) => (v - start[i % 3]) * unit),
+        values: Float32Array.from(values, (v, i) =>
+          i % 3 === up ? v * unit : (v - start[i % 3]) * unit),
       });
     }
   }

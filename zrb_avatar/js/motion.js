@@ -1,4 +1,5 @@
-// Which clip plays: the wanted pool (idle, thinking, tool, attention, speaking, dance) loops in
+// Which clip plays: the wanted pool (idle, thinking, tool, attention, permission, speaking, dance)
+// loops in
 // random order, falling back to idle; an action plays once over it, then the loop goes on.
 import * as THREE from 'three';
 
@@ -11,6 +12,7 @@ const random = list => list[Math.floor(Math.random() * list.length)];
 export function createMotion(mixer, clips) {
   let current = null, playing = null; // the mixer action, and the pool it came from
   let wanted = 'idle';
+  let held = false; // a clip held at its last frame: she stays as it ended until she is let go
   const loopPool = () => clips[wanted] ? wanted : 'idle';
 
   function play(clip, fade = 0.6, speed = 1) {
@@ -41,19 +43,28 @@ export function createMotion(mixer, clips) {
   // screen. A loop that an action just crossfaded over keeps running at fading weight and finishes
   // on its own schedule, and starting the next loop from that event cut the action short: the pose
   // snapped back to idle (or thinking) a second into the action.
-  mixer.addEventListener('finished', ({ action }) => { if (action === current) playLoop(); });
+  mixer.addEventListener('finished', ({ action }) => { if (action === current && !held) playLoop(); });
 
   return {
     get clip() { return current?.getClip() ?? null; },
     get acting() { return playing === 'actions'; },
-    // Switch to another loop pool, but let an action finish first.
+    // Switch to another loop pool, but let an action -- or a cover she is holding -- finish first.
     want(pool) {
       wanted = pool;
-      if (playing !== 'actions' && playing !== loopPool()) playLoop();
+      if (!held && playing !== 'actions' && playing !== loopPool()) playLoop();
     },
-    act(clip) {
+    // `hold` plays it once and stays at its last frame (clampWhenFinished), so a cover is a posture
+    // she keeps rather than a gesture that ends by itself.
+    act(clip, hold = false) {
       play(clip, 0.3);
-      playing = 'actions';
+      playing = hold ? 'cover' : 'actions';
+      held = hold;
+    },
+    // Let go of one held that way: back to the loop her state asks for.
+    release() {
+      if (!held) return;
+      held = false;
+      playLoop();
     },
   };
 }

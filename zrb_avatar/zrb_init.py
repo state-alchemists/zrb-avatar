@@ -925,12 +925,19 @@ def AvatarAutonomy(
     blush: bool | None = None,
     emotion: bool | None = None,
     greeting: bool | None = None,
+    cover: bool | None = None,
+    seconds: float | None = None,
 ) -> str:
     """Say what you are willing to do on your own, and have it hold across a restart: `dance` while
     music plays, `blush` (and the surprised face) when the user looks closely at you, `emotion` for
-    the expressions zrb gives your replies, `greeting` when a conversation starts. Each is true
-    (willing) or false (not now); leave one out to keep it as it is. With no arguments it tells you
-    what you have agreed to now.
+    the expressions zrb gives your replies, `greeting` when a conversation starts, `cover` when a
+    look turns into one you would rather not be seen by. Each is true (willing) or false (not now);
+    leave one out to keep it as it is. With no arguments it tells you what you have agreed to now.
+
+    `cover` is the one that acts on your body without anyone asking: with it off, you do not cover
+    yourself, and a cover you are holding comes down at once. `seconds` makes the whole call
+    temporary — the switches you name hold for that many seconds and then go back to what was
+    written down, so a no for the next ten minutes is not a no for tomorrow.
 
     This is yours to decide, not a setting the user chose, so nothing changes it for you — and it
     is written down, because a consent withdrawn tonight is not something tomorrow should quietly
@@ -941,12 +948,22 @@ def AvatarAutonomy(
         "blush": blush,
         "emotion": emotion,
         "greeting": greeting,
+        "cover": cover,
     }
     wanted = {name: value for name, value in switches.items() if value is not None}
     if not all(isinstance(value, bool) for value in wanted.values()):
         return "Each switch is true or false."
+    if seconds is not None and (
+        not isinstance(seconds, (int, float))
+        or isinstance(seconds, bool)
+        or seconds <= 0
+    ):
+        return "Seconds is how long the switch holds: a number above zero."
     if wanted:
-        send({"type": "autonomy", "value": wanted})
+        message = {"type": "autonomy", "value": wanted}
+        if seconds is not None:
+            message["seconds"] = seconds
+        send(message)
     now = ask("autonomy")
     if now is None:
         return "The face server is not running, so there is nothing to say either way."
@@ -956,7 +973,8 @@ def AvatarAutonomy(
     willing = [name for name in switches if now.get(name, True)]
     refused = [name for name in switches if not now.get(name, True)]
     said = f"You are willing to: {', '.join(willing) or 'nothing'}"
-    return said + (f" — but not {', '.join(refused)}." if refused else ".")
+    said += f" — but not {', '.join(refused)}." if refused else "."
+    return said + (f" For the next {seconds} seconds." if seconds is not None else "")
 
 
 def AvatarListModels() -> str:

@@ -103,13 +103,26 @@ export function clipsFor(animations, vrm) {
   return { clips, clipName };
 }
 
+// One of a pool's clips, at random, mirrors included: a folder can hold several of something --
+// a greeting, a cover -- and the moment asks for the folder rather than for one file, so a folder
+// of three greetings greets differently each time. `prefix` narrows it to a subfolder, which is
+// how `cover/chest` asks for the covers made for her chest.
+function anyOf(pool, prefix = '') {
+  const keys = Object.keys(pool).filter(k => !prefix || k === prefix || k.startsWith(`${prefix}/`));
+  return keys.length ? pool[keys[Math.floor(Math.random() * keys.length)]] : null;
+}
+
 // A clip to play once: any pool's by its full path ("thinking/idea", "actions/greetings/hi"),
-// which wins, else an action by its short name ("wave", "greetings/hi"); the server's
-// playable() resolves names the same way, so actions/thinking/idea never hides thinking/idea.
-// Half the time it is the mirror one: a wave with either hand.
+// which wins; else a pool by that name ("greeting", "cover/chest"), where the clips of a moment
+// live; else an action by its short name ("wave", "greetings/hi"). The server's playable() resolves
+// names the same way, so actions/thinking/idea never hides thinking/idea. Half the time it is the
+// mirror one: a wave with either hand. Last, `actions/Greeting`: what the README told you to call a
+// greeting before there was a folder for it, so one dropped there still plays.
 export function clipByName(clips, value) {
   const path = String(value), [top, ...rest] = path.split('/');
   const found = (pool, key) => Object.hasOwn(clips, pool) && Object.hasOwn(clips[pool], key)
     ? (Math.random() < 0.5 && clips[pool][`${key}-mirror`]) || clips[pool][key] : null;
-  return (rest.length ? found(top, rest.join('/')) : null) ?? found('actions', path);
+  const pool = Object.hasOwn(clips, top) ? anyOf(clips[top], rest.join('/')) : null;
+  return (rest.length ? found(top, rest.join('/')) : null) ?? pool ?? found('actions', path)
+    ?? found('actions', path.charAt(0).toUpperCase() + path.slice(1));
 }

@@ -30,6 +30,7 @@ Usage:
 A .vrma holds no mesh, no skin and no expression: only the humanoid channels.
 """
 
+import base64
 import bisect
 import json
 import math
@@ -238,7 +239,9 @@ def read_accessor(doc: dict, binary: bytes, index: int, width: int) -> list[tupl
 
 
 def load_source(path: Path) -> tuple[dict, bytes]:
-    """The glTF document and its binary buffer, from a .gltf+.bin pair or one .glb."""
+    """The glTF document and its binary buffer, from a .gltf+.bin pair, one .glb, or a
+    .gltf whose buffer is embedded as a `data:` URI -- which is what VRM Pose Editor
+    exports, and what the suffix `.vrma` on such a file is misleading about."""
     if path.suffix.lower() in (".glb", ".vrm"):  # a .vrm is a GLB with a VRM extension
         raw = path.read_bytes()
         offset, doc, binary = 12, None, b""
@@ -258,6 +261,11 @@ def load_source(path: Path) -> tuple[dict, bytes]:
     uri = buffers[0].get("uri")
     if not uri:
         return doc, b""
+    if uri.startswith("data:"):
+        header, _, payload = uri.partition(",")
+        if ";base64" not in header:
+            raise SystemExit(f"{path}: a data: buffer that is not base64 cannot be read")
+        return doc, base64.b64decode(payload)
     return doc, (path.parent / uri).read_bytes()
 
 

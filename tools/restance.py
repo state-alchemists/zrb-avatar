@@ -24,6 +24,8 @@ Usage:
 
 `--width` is the stance to land on, in centimetres between the feet, centred on the pelvis.
 The default is the width the authored gestures stand on, so that the whole library agrees.
+`--description` replaces the clip's own; left out, whatever the source said about itself is
+kept, because correcting a stance is not a reason to relabel a clip.
 """
 
 import argparse
@@ -73,18 +75,19 @@ def feet_of(paths, drift=False):
 class Clip:
     """One clip, with the rig the clip was captured on kept verbatim."""
 
-    def __init__(self, source, work):
+    def __init__(self, source, work, description=None):
         self.doc, self.rot, trans = core.tracks_of(source)
         self.hips = [tuple(t) for t in trans]
         self.base_hips = list(self.hips)
         self.work = work
+        self.description = description
         self.angles = {"left": (0.0, 0.0), "right": (0.0, 0.0)}
         self.serial = 0
         os.makedirs(work, exist_ok=True)
         for name in os.listdir(work):
             os.remove(os.path.join(work, name))
 
-    def write(self, tag, description="stance corrected"):
+    def write(self, tag):
         self.serial += 1
         path = os.path.join(self.work, f"{self.serial:04d}-{tag}.vrma")
         tracks = {}
@@ -100,7 +103,7 @@ class Clip:
                         q = core.q_mul(q, core.q_axis(AXIS[axis], deg))
                 out.append(core.q_norm(q))
             tracks[bone] = out
-        core.write_glb(path, self.doc, tracks, self.hips, description)
+        core.write_glb(path, self.doc, tracks, self.hips, self.description)
         return path
 
     def measure(self, tag="probe"):
@@ -135,7 +138,7 @@ def main():
     parser.add_argument("source")
     parser.add_argument("target")
     parser.add_argument("--width", type=float, default=22.3)
-    parser.add_argument("--description", default="standing at rest, stance corrected")
+    parser.add_argument("--description", default=None)
     parser.add_argument("--drift", action="store_true", help="report how far the feet travel")
     args = parser.parse_args()
     # a relative target would be resolved against this script's folder by the probe, which runs
@@ -148,7 +151,14 @@ def main():
     before = feet_of([args.source], drift=args.drift)[os.path.basename(args.source)]
     floor = (before["left"][2] + before["right"][2]) / 2
 
-    clip = Clip(args.source, "/tmp/restance-work")
+    clip = Clip(args.source, "/tmp/restance-work", description=args.description)
+    if clip.description is None:
+        # the clip keeps what it already said about itself; only a clip that said nothing gets
+        # nothing, rather than every action inheriting an idle loop's description
+        animations = clip.doc.get("animations") or []
+        extras = animations[0].get("extras") if animations else None
+        if isinstance(extras, dict) and isinstance(extras.get("description"), str):
+            clip.description = extras["description"]
     for side in ("left", "right"):
         solve_leg(clip, side, goal[side], COARSE)
     # the two thighs share the frame the feet are measured in — the pelvis is built from them —
@@ -157,8 +167,13 @@ def main():
         for side in ("left", "right"):
             solve_leg(clip, side, goal[side], FINE)
 
-    # the legs came under her, so the feet sit lower: lift the hips by exactly that much and the
-    # feet return to the floor they stood on
+    # The legs came under her, so the feet sit lower: lift the hips by exactly that much and the
+    # feet return to the floor they stood on. `z` is up in every clip this tool runs on -- the
+    # Quaternius files carry the body's height in z, and their hips node sits at [0, 0.05, 0.917]
+    # to say so. The 100STYLE files put it in y instead; those arrive with a correct stance and do
+    # not come through here. `tools/floor.py` is the authority on the height regardless: it measures
+    # the floor the model actually stands at and moves the hips until the clip agrees with the rest
+    # of the library, so whatever residue this leaves is taken out there.
     dropped = (clip.measure()["left"][2] + clip.measure()["right"][2]) / 2 - floor
     clip.hips = [(x, y, z - dropped / 100) for x, y, z in clip.base_hips]
     after = clip.measure("final")

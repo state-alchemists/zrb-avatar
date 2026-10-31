@@ -28,6 +28,12 @@
     pointer-events: none; /* the window is dragged by her body, never by a caption */
   }
   #subtitle.on { opacity: 1; }
+  /* The state while she is not speaking: the same line, louder in colour than in weight — a note
+     rather than a sentence, so "(working…)" is never mistaken for something she said. */
+  #subtitle.status {
+    color: #ffd76a; font-style: italic; font-weight: 600;
+    background: rgba(9, 11, 18, .62);
+  }
 </style>
 <script type="importmap">
 { "imports": {

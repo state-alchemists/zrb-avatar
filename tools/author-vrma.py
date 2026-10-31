@@ -204,7 +204,9 @@ def write_glb(path, base_doc, tracks, hips, description):
             {
                 "channels": channels,
                 "samplers": samplers,
-                "extras": {"description": description},
+                # A clip with nothing to say about itself says nothing, rather than carrying
+                # `"description": null` — the same shape vrma-writer.mjs produces.
+                **({"extras": {"description": description}} if description else {}),
             }
         ],
         "buffers": [{"byteLength": len(bin_)}],

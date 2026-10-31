@@ -14,7 +14,7 @@ import { createPose } from './pose.js';
 import { createDesktop } from './desktop.js';
 
 // state -> glow colour
-const LOOK = { idle: '#33ccff88', thinking: '#a6f', tool: '#3f9', attention: '#f46', speaking: '#6ef' };
+const LOOK = { idle: '#33ccff88', thinking: '#a6f', tool: '#3f9', attention: '#f46', permission: '#f22', speaking: '#6ef' };
 const params = new URLSearchParams(location.search);
 // Frames drawn per second; her motion is smooth at 30, and drawing costs the most CPU and GPU.
 const FPS = Number(params.get('fps')) || 30;
@@ -163,12 +163,26 @@ function snapshot(id) {
 // read ahead of playback. So a line is held for a minimum time, and a clear that never arrives
 // (a crashed turn, a zrb killed mid-sentence) cannot leave it up for ever.
 const subtitleEl = document.getElementById('subtitle');
-let subtitleHold = 0, subtitleTimer = 0;
+let subtitleHold = 0, subtitleTimer = 0, statusText = '', sentenceUp = false;
 function hideSubtitle() {
   clearTimeout(subtitleTimer);
   subtitleTimer = 0;
-  subtitleEl.classList.remove('on');
+  sentenceUp = false;
+  if (statusText) return showStatus();  // the state's line takes the space rather than leaving it blank
+  subtitleEl.classList.remove('on', 'status');
   subtitleEl.textContent = '';
+}
+// A state is not a sentence: it has no hold and no expiry, and it stays up until the state moves.
+function showStatus() {
+  clearTimeout(subtitleTimer);
+  subtitleTimer = 0;
+  subtitleEl.textContent = statusText;
+  subtitleEl.classList.add('on', 'status');
+}
+function setStatus(text) {
+  statusText = typeof text === 'string' ? text.trim() : '';
+  if (sentenceUp) return;  // what she is saying wins until it goes
+  if (statusText) showStatus(); else hideSubtitle();
 }
 function showSubtitle(msg) {
   if (msg.clear) {
@@ -180,6 +194,8 @@ function showSubtitle(msg) {
   const text = typeof msg.text === 'string' ? msg.text.trim() : '';
   if (!text) return hideSubtitle();
   subtitleEl.textContent = text;
+  sentenceUp = true;
+  subtitleEl.classList.remove('status');
   if (typeof msg.size === 'number' && msg.size > 0) subtitleEl.style.setProperty('--subtitle-size', `${msg.size}px`);
   subtitleEl.classList.add('on');
   // Readable for about a second and a half plus a twentieth of a second a letter; the long
@@ -190,22 +206,43 @@ function showSubtitle(msg) {
   subtitleTimer = setTimeout(hideSubtitle, hold + 12000);
 }
 
+// A look she answered by covering herself (see the reflex in server.py): the clip made for what
+// the look was at, else one that covers all of her, played once and held at its last frame until
+// the look stops. Neither folder has anything in it until someone puts a clip there, and then she
+// stays in the idle she was already in -- a cover is hers to own, not something to fake.
+function coverWith(pool) {
+  if (!her) return;
+  if (!pool) return her.motion.release();
+  const clip = clipByName(her.clips, pool) ?? (pool === 'cover/all' ? null : clipByName(her.clips, 'cover/all'));
+  if (clip) her.motion.act(clip, true); else her.motion.release();
+}
+
 function onEvent({ data }) {
   const msg = JSON.parse(data);
   if (msg.type === 'state') {
     if (msg.value === 'thinking' && state !== 'tool') her.expression.hush(); // new prompt cuts speech
     setState(msg.value);
+    // A client too old to send {"type":"status"} would leave its last line up for ever. A turn
+    // ends in idle, so the caption goes with it even when no status message says so.
+    if (msg.value === 'idle') setStatus('');
   } else if (msg.type === 'mouth') {
     her.expression.speak(msg.values, msg.step);
   } else if (msg.type === 'subtitle') {
     showSubtitle(msg);
-  } else if (msg.type === 'action' && clipByName(her.clips, msg.value)) {
-    her.motion.act(clipByName(her.clips, msg.value));
+  } else if (msg.type === 'status') {
+    setStatus(msg.text);  // what she is doing, up whenever no sentence is
+  } else if (msg.type === 'action') {
+    // Resolved once: a name that is a pool picks one of its clips at random, and asking twice
+    // could play a different clip than the one the check approved.
+    const clip = clipByName(her.clips, msg.value);
+    if (clip) her.motion.act(clip);
   } else if (msg.type === 'model' && typeof msg.value === 'string' && msg.value !== her.name) {
     // Another avatar: in her place, once we know it is there (a bad name changes nothing).
     fetch('models').then(r => r.json()).then(names => { if (names.includes(msg.value)) show(msg.value); }).catch(() => {});
   } else if (msg.type === 'pose') {
     msg.release ? her.pose.release() : her.pose.set(msg);
+  } else if (msg.type === 'cover') {
+    coverWith(msg.pool);
   } else if (msg.type === 'blink') {
     her.expression.blinkNow(msg.eyes, msg.seconds); // one she chose: a wink, or a slow one
   } else if (msg.type === 'music') {

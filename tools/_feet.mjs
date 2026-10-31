@@ -59,6 +59,10 @@ function sample() {
     // the same two points in world axes: the pelvis frame is built from the thighs, so it turns
     // when they do — and a stance solver that reads it would be moving the ruler
     lw: worldOf(lf), rw: worldOf(rf),
+    // absolute world height, which is the only number that says where the floor is: the values
+    // above are measured from the pelvis, so a clip with straighter legs reads "lower" while
+    // standing on exactly the same floor
+    wy: [lf.y * 100, rf.y * 100],
     separation: lf.distanceTo(rf) * 100,
     horizontal: Math.hypot(lf.x - rf.x, lf.z - rf.z) * 100,
   };
@@ -83,6 +87,14 @@ for (const path of clips) {
       `apart ${cm(s.separation)} cm (horizontal ${cm(s.horizontal)})   ` +
       `world L ${s.lw.join(',')} R ${s.rw.join(',')}`
   );
+  // Where the feet actually are: sampled across the clip, because a clip can start with one foot
+  // in the air and plant it later.
+  let lowest = Math.min(...s.wy);
+  for (const f of [0.25, 0.5, 0.75, 0.98]) {
+    mixer.setTime(f * clip.duration);
+    lowest = Math.min(lowest, ...sample().wy);
+  }
+  mixer.setTime(0);
   if (drift) {
     // a stance correction is one constant rotation per thigh, so a clip whose feet travel of
     // their own accord would be corrected into a slide: this is how far they travel
@@ -104,4 +116,8 @@ for (const path of clips) {
     );
     mixer.setTime(0);
   }
+  // The floor. Two clips standing on the same ground agree here however differently their legs
+  // are bent, and the pelvis-relative "up" above does not say it: a straight-legged clip reads
+  // 93 cm below the hips and a bent one 88, on exactly the same floor.
+  console.log(`  floor: lowest foot at ${lowest.toFixed(1)} cm (world height)`);
 }
