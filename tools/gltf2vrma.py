@@ -3,8 +3,9 @@
 VRM Animation wants motion on VRM humanoid bone names, so this does three things:
 
 1. maps the source rig's bone names to VRM humanoid names, for one of a few known
-   rigs -- Blender/Rigify (`DEF-` names), Mixamo (`mixamorig:` names), or a glTF
-   that already uses humanoid names; `--rig auto` picks by looking at the nodes,
+   rigs -- Blender/Rigify (`DEF-` names), Mixamo (`mixamorig:` names), Unreal's
+   mannequin (`pelvis`, `upperarm_l`), or a glTF that already uses humanoid names;
+   `--rig auto` picks by looking at the nodes,
 2. measures the rig's pose offset from its own T-pose clip when the file has one
    (`A_TPose`, `T-Pose`, ...), because a .vrma is applied against the destination
    model's T-pose: copying rotations straight across arrives offset whenever the
@@ -18,7 +19,7 @@ consumer expects, and a clip missing either is refused or reported as having no
 length.
 
 Usage:
-    python3 gltf2vrma.py SOURCE OUT_DIR [--rig auto|rigify|mixamo|vrm|vrm-meta]
+    python3 gltf2vrma.py SOURCE OUT_DIR [--rig auto|rigify|mixamo|unreal|vrm|vrm-meta]
                                         [--tpose NAME] [--list] [CLIP ...]
 
     SOURCE   a .gltf (with its .bin beside it) or a .glb
@@ -29,6 +30,7 @@ Usage:
 A .vrma holds no mesh, no skin and no expression: only the humanoid channels.
 """
 
+import base64
 import bisect
 import json
 import math
@@ -129,6 +131,42 @@ for _mixamo_side, _vrm_side in (("Left", "left"), ("Right", "right")):
                 f"{_vrm_side}{_vrm_finger}{_joint}"
             )
 
+# Unreal Engine's mannequin, as the newer Quaternius pack is exported (`pelvis`, `spine_01`,
+# `upperarm_l`, `index_01_l`). These are Unreal's own retargeting names, which is why the second
+# pack arrives in a different spelling from the first even though both came from the same author.
+UNREAL_BONES = {
+    "pelvis": "hips",
+    "spine_01": "spine",
+    "spine_02": "chest",
+    "spine_03": "upperChest",
+    "neck_01": "neck",
+    "Head": "head",
+}
+for _ue_side, _vrm_side in (("_l", "left"), ("_r", "right")):
+    UNREAL_BONES.update(
+        {
+            f"clavicle{_ue_side}": f"{_vrm_side}Shoulder",
+            f"upperarm{_ue_side}": f"{_vrm_side}UpperArm",
+            f"lowerarm{_ue_side}": f"{_vrm_side}LowerArm",
+            f"hand{_ue_side}": f"{_vrm_side}Hand",
+            f"thigh{_ue_side}": f"{_vrm_side}UpperLeg",
+            f"calf{_ue_side}": f"{_vrm_side}LowerLeg",
+            f"foot{_ue_side}": f"{_vrm_side}Foot",
+            f"ball{_ue_side}": f"{_vrm_side}Toes",
+            f"thumb_01{_ue_side}": f"{_vrm_side}ThumbMetacarpal",
+            f"thumb_02{_ue_side}": f"{_vrm_side}ThumbProximal",
+            f"thumb_03{_ue_side}": f"{_vrm_side}ThumbDistal",
+        }
+    )
+    for _ue_finger, _vrm_finger in (
+        ("index", "Index"),
+        ("middle", "Middle"),
+        ("ring", "Ring"),
+        ("pinky", "Little"),
+    ):
+        for _number, _joint in (("01", "Proximal"), ("02", "Intermediate"), ("03", "Distal")):
+            UNREAL_BONES[f"{_ue_finger}_{_number}{_ue_side}"] = f"{_vrm_side}{_vrm_finger}{_joint}"
+
 # A glTF already built for VRM needs no mapping at all: the names are the names.
 _HUMANOID_CORE = ("hips", "spine", "chest", "upperChest", "neck", "head")
 _HUMANOID_LIMBS = (
@@ -160,7 +198,12 @@ VRM_BONES.update(
     }
 )
 
-RIG_TABLES = {"rigify": RIGIFY_BONES, "mixamo": MIXAMO_BONES, "vrm": VRM_BONES}
+RIG_TABLES = {
+    "rigify": RIGIFY_BONES,
+    "mixamo": MIXAMO_BONES,
+    "unreal": UNREAL_BONES,
+    "vrm": VRM_BONES,
+}
 
 COMPONENT_FLOAT = 5126
 ARRAY_VEC4 = "VEC4"
@@ -196,7 +239,9 @@ def read_accessor(doc: dict, binary: bytes, index: int, width: int) -> list[tupl
 
 
 def load_source(path: Path) -> tuple[dict, bytes]:
-    """The glTF document and its binary buffer, from a .gltf+.bin pair or one .glb."""
+    """The glTF document and its binary buffer, from a .gltf+.bin pair, one .glb, or a
+    .gltf whose buffer is embedded as a `data:` URI -- which is what VRM Pose Editor
+    exports, and what the suffix `.vrma` on such a file is misleading about."""
     if path.suffix.lower() in (".glb", ".vrm"):  # a .vrm is a GLB with a VRM extension
         raw = path.read_bytes()
         offset, doc, binary = 12, None, b""
@@ -216,6 +261,11 @@ def load_source(path: Path) -> tuple[dict, bytes]:
     uri = buffers[0].get("uri")
     if not uri:
         return doc, b""
+    if uri.startswith("data:"):
+        header, _, payload = uri.partition(",")
+        if ";base64" not in header:
+            raise SystemExit(f"{path}: a data: buffer that is not base64 cannot be read")
+        return doc, base64.b64decode(payload)
     return doc, (path.parent / uri).read_bytes()
 
 
@@ -251,10 +301,12 @@ def detect_rig(doc: dict) -> str:
         return "rigify"
     if any("mixamorig" in name for name in names):
         return "mixamo"
+    if "pelvis" in names and any(name.startswith("upperarm_") for name in names):
+        return "unreal"
     if any(name in VRM_BONES for name in names):
         return "vrm"
     raise SystemExit(
-        "cannot tell which rig this is: pass --rig rigify|mixamo|vrm, or --list to see "
+        "cannot tell which rig this is: pass --rig rigify|mixamo|unreal|vrm, or --list to see "
         f"the bone names. First nodes: {', '.join(names[:8])}"
     )
 

@@ -16,6 +16,24 @@
   #status { position: fixed; bottom: 8px; width: 100%; text-align: center; color: var(--glow); font: 12px monospace; opacity: .7; }
   html.app #status { display: none; }
   html.app #status.error { display: block; color: #f46; opacity: 1; }
+  /* What she is saying: under her, over the status line, gone when the voice stops. The client
+     sends a clear as the audio is read, ahead of the ear, so the line is ended by the mouth
+     rather than by the clear — see js/main.js speechEnded. */
+  #subtitle {
+    position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
+    max-width: min(92%, 40em); padding: 6px 12px; border-radius: 9px;
+    background: rgba(9, 11, 18, .74); color: #eaf6ff;
+    font: var(--subtitle-size, 15px)/1.35 system-ui, -apple-system, sans-serif;
+    text-align: center; opacity: 0; transition: opacity .16s ease-out;
+    pointer-events: none; /* the window is dragged by her body, never by a caption */
+  }
+  #subtitle.on { opacity: 1; }
+  /* The state while she is not speaking: the same line, louder in colour than in weight — a note
+     rather than a sentence, so "(working…)" is never mistaken for something she said. */
+  #subtitle.status {
+    color: #ffd76a; font-style: italic; font-weight: 600;
+    background: rgba(9, 11, 18, .62);
+  }
 </style>
 <script type="importmap">
 { "imports": {
@@ -27,6 +45,7 @@
 </script>
 </head>
 <body>
+<div id="subtitle"></div>
 <div id="status">loading…</div>
 <script type="module" src="js/main.js"></script>
 </body>

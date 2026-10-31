@@ -7,10 +7,11 @@ Loading this script turns the face on: zrb's state and speech go to the server
 (server.py, `python -m zrb_avatar serve`). It
 also owns zrb's speech (`enable_speech`), so other init scripts should only set
 the voice (CFG.DEFAULT_LLM_SPEECH_BACKEND / _VOICE), not call `enable_speech`.
-zrb also gets nine tools of hers: AvatarListActions lists her animations by pool with what each looks
-like, AvatarAction plays one once, AvatarPose moves her body itself (hands, head, posture) for a few
-seconds, AvatarRest lets go of a pose she is holding, AvatarAutonomy reads or changes what she may
-do unasked, AvatarLook shows her own window as the user sees it, AvatarListModels lists the avatars (VRM
+zrb also gets eleven tools of hers: AvatarListActions lists her animations by pool with what each
+looks like, AvatarAction plays one once, AvatarPose moves her body itself (hands, head, posture) for a
+few seconds, AvatarRest lets go of a pose she is holding, AvatarBlink blinks or winks deliberately,
+AvatarFace puts a feeling on her face on purpose, AvatarAutonomy reads or changes what she may do
+unasked, AvatarLook shows her own window as the user sees it, AvatarListModels lists the avatars (VRM
 models) with the one showing, AvatarModel switches to another, and AvatarStatus reports what the
 ambient line says.
 
@@ -231,7 +232,7 @@ class QuietSpeech(AnySpeechBackend):
     def create_audio(self, text: str):
         if text.strip() in (NOTHING_TO_SAY, ".", "..."):
             return SpeechAudio(16000, [])
-        return with_mouth(self.inner.create_audio(text))
+        return with_mouth(self.inner.create_audio(text), text)
 
     @property
     def needs_zrb_playback(self) -> bool:
@@ -850,17 +851,93 @@ def AvatarRest() -> str:
     return "Let go: the animations have your body again."
 
 
+# What AvatarBlink takes; the page (js/expression.js) knows the same names.
+BLINK_EYES = ("both", "left", "right")
+BLINK_SECONDS = (0.08, 2.0)
+
+
+def AvatarBlink(eyes: str = "both", seconds: float = 0.2) -> str:
+    """Blink deliberately: one quick blink, a slow one that says "I heard you", or a wink. She
+    closes her eyes for that long and then her face goes back to blinking on its own — this is
+    not the blink she already does every few seconds, it is the one that means something. Use it
+    where the blink is the point, not as punctuation.
+
+    eyes: "both" (a blink), "left" or "right" (a wink). seconds: 0.08 to 2; a natural blink is
+    about a fifth of a second, and half a second or more is deliberate. A model without a
+    separate left or right blink shape winks with both eyes rather than holding one lid down.
+    """
+    eyes = (eyes or "both").strip().lower()
+    if eyes not in BLINK_EYES:
+        return f"eyes must be one of {', '.join(BLINK_EYES)}; got {eyes!r}."
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        return f"seconds must be a number; got {seconds!r}."
+    seconds = max(BLINK_SECONDS[0], min(BLINK_SECONDS[1], float(seconds)))
+    send({"type": "blink", "eyes": eyes, "seconds": seconds})
+    if eyes == "both":
+        return f"Blinked for {seconds:g} s."
+    return f"Winked with the {eyes} eye ({seconds:g} s)."
+
+
+# What AvatarFace takes; the page (js/expression.js) knows the same names and the same strengths.
+FACES = (
+    "happy",
+    "sad",
+    "angry",
+    "surprised",
+    "relaxed",
+    "pout",
+    "smirk",
+    "worried",
+    "delighted",
+    "sleepy",
+)
+FACE_STRENGTHS = {"soft": 0.5, "normal": 1.0, "strong": 1.5}
+
+
+def AvatarFace(emotion: str = "pout", strength: str = "normal") -> str:
+    """Put a feeling on her face for about six seconds, then let it fade. The five VRM presets are
+    `happy`, `sad`, `angry`, `surprised` and `relaxed`; the five blends are faces no model carries as
+    a shape, made of two presets at once:
+
+      pout       angry + sad        a sulk, mouth pinched small
+      smirk      happy + angry     pleased with herself, one corner up
+      worried    sad + surprised   the mouth corners down, the eyes a little wider
+      delighted  happy + surprised the smile that also opens the eyes
+      sleepy     relaxed + sad     lids down, a soft mouth; quiet and tired
+
+    `strength` says how hard it is worn: `soft` (half), `normal` or `strong` (one and a half). Use
+    it when the face *is* the sentence — pouting, being teased, a mock scowl — not as punctuation on
+    every reply: the emotion zrb shows for your replies needs no call. A model that lacks one of a
+    blend's two halves shows the half it has.
+    """
+    emotion = (emotion or "pout").strip().lower()
+    if emotion not in FACES:
+        return f"emotion must be one of {', '.join(FACES)}; got {emotion!r}."
+    strength = (strength or "normal").strip().lower()
+    if strength not in FACE_STRENGTHS:
+        return f"strength must be one of {', '.join(FACE_STRENGTHS)}; got {strength!r}."
+    send({"type": "emotion", "value": emotion, "strength": FACE_STRENGTHS[strength]})
+    return f"{emotion}, {strength}, fading after six seconds."
+
+
 def AvatarAutonomy(
     dance: bool | None = None,
     blush: bool | None = None,
     emotion: bool | None = None,
     greeting: bool | None = None,
+    cover: bool | None = None,
+    seconds: float | None = None,
 ) -> str:
     """Say what you are willing to do on your own, and have it hold across a restart: `dance` while
     music plays, `blush` (and the surprised face) when the user looks closely at you, `emotion` for
-    the expressions zrb gives your replies, `greeting` when a conversation starts. Each is true
-    (willing) or false (not now); leave one out to keep it as it is. With no arguments it tells you
-    what you have agreed to now.
+    the expressions zrb gives your replies, `greeting` when a conversation starts, `cover` when a
+    look turns into one you would rather not be seen by. Each is true (willing) or false (not now);
+    leave one out to keep it as it is. With no arguments it tells you what you have agreed to now.
+
+    `cover` is the one that acts on your body without anyone asking: with it off, you do not cover
+    yourself, and a cover you are holding comes down at once. `seconds` makes the whole call
+    temporary — the switches you name hold for that many seconds and then go back to what was
+    written down, so a no for the next ten minutes is not a no for tomorrow.
 
     This is yours to decide, not a setting the user chose, so nothing changes it for you — and it
     is written down, because a consent withdrawn tonight is not something tomorrow should quietly
@@ -871,12 +948,22 @@ def AvatarAutonomy(
         "blush": blush,
         "emotion": emotion,
         "greeting": greeting,
+        "cover": cover,
     }
     wanted = {name: value for name, value in switches.items() if value is not None}
     if not all(isinstance(value, bool) for value in wanted.values()):
         return "Each switch is true or false."
+    if seconds is not None and (
+        not isinstance(seconds, (int, float))
+        or isinstance(seconds, bool)
+        or seconds <= 0
+    ):
+        return "Seconds is how long the switch holds: a number above zero."
     if wanted:
-        send({"type": "autonomy", "value": wanted})
+        message = {"type": "autonomy", "value": wanted}
+        if seconds is not None:
+            message["seconds"] = seconds
+        send(message)
     now = ask("autonomy")
     if now is None:
         return "The face server is not running, so there is nothing to say either way."
@@ -886,7 +973,8 @@ def AvatarAutonomy(
     willing = [name for name in switches if now.get(name, True)]
     refused = [name for name in switches if not now.get(name, True)]
     said = f"You are willing to: {', '.join(willing) or 'nothing'}"
-    return said + (f" — but not {', '.join(refused)}." if refused else ".")
+    said += f" — but not {', '.join(refused)}." if refused else "."
+    return said + (f" For the next {seconds} seconds." if seconds is not None else "")
 
 
 def AvatarListModels() -> str:
@@ -959,6 +1047,8 @@ for tool in (
     AvatarAction,
     AvatarPose,
     AvatarRest,
+    AvatarBlink,
+    AvatarFace,
     AvatarAutonomy,
     AvatarLook,
     AvatarListModels,

@@ -20,6 +20,9 @@ asked: {"dance": bool, "blush": bool, "emotion": bool, "greeting": bool}. A {"ty
 "value": {"dance": false}} event sets any of them and is written to <home>/autonomy.json, so a
 restart does not quietly undo it; a switch she has never touched sits at its default — `dance` off,
 the rest on (see AUTONOMY_DEFAULTS).
+A {"type": "blink", "eyes": "both"|"left"|"right", "seconds": 0.2} event is a blink she chose; it is
+relayed like a pose and not remembered, because a blink that arrived while a page was reloading has
+already happened.
 Stdlib only; run with `python3 server.py` or `zrb-avatar serve`, then open http://localhost:7777.
 
 Models and animations are looked up in folders, the first match winning:
@@ -108,6 +111,7 @@ AUTONOMY = (
     "blush",
     "emotion",
     "greeting",
+    "cover",
 )  # what she may do without being asked
 AUTONOMY_FILE = (
     HOME / "autonomy.json"
@@ -122,9 +126,15 @@ ANIM_HOME = HOME / "anim"
 TEMPLATE_FILE = ANIM_HOME / ".template.json"
 SHIPPED_ANIMS = HERE / "anim"
 # Each switch's starting value, and what a page assumes before the server says anything. Only
-# `dance` starts off: the other three trigger on something the user did, while `dance` triggers on
+# `dance` starts off: the other four trigger on something the user did, while `dance` triggers on
 # the media watcher, which cannot tell a song from a talk.
-AUTONOMY_DEFAULTS = {"dance": False, "blush": True, "emotion": True, "greeting": True}
+AUTONOMY_DEFAULTS = {
+    "dance": False,
+    "blush": True,
+    "emotion": True,
+    "greeting": True,
+    "cover": True,
+}
 
 
 def _on(variable: str) -> bool:
@@ -137,9 +147,27 @@ def _on(variable: str) -> bool:
 # for one. Off unless asked for: an install should not start refusing looks before whoever runs it
 # has decided that is what they want.
 REFLEX = _on(env_name("REFLEX"))
-# And this is what she does about it: crossed forearms over chest and hips, her face turned away,
-# shoulders in. A held pose rather than a clip, because nothing in the animation pool covers her.
-COVER = {"leftHand": "chest", "rightHand": "hips", "head": "away", "body": "hunch"}
+# And this is what she does about it: a clip of her own, out of the folder made for what the look
+# was at -- `cover/chest`, `cover/bottom`, or `cover/all` for a look from below, which sees both at
+# once. Nothing ships in them, because no source here may be redistributed; a folder with nothing
+# in it leaves her in the idle she was already in. The page plays one of its clips and holds its
+# last frame until the look stops.
+COVER_POOLS = {"chest": "cover/chest", "hips": "cover/bottom", "thighs": "cover/bottom"}
+COVER_ALL = "cover/all"
+
+
+def cover_for(view: dict) -> str:
+    """Which cover folder answers this view: what it is on, or all of her when it is from below."""
+    if view.get("side") == "below":
+        return COVER_ALL
+    return COVER_POOLS.get(view.get("part") or "", COVER_ALL)
+# Pools that hold the clips for a moment rather than for a state: a greeting when a conversation
+# starts, and whatever else a folder of yours is named later (a goodbye, thanks). Nothing plays in
+# one of these by itself -- the moment asks for the pool by name, and the page plays one of its
+# clips, chosen at random, so a folder of three greetings greets differently each time. The folder
+# is created empty in the home animation folder, because a folder you cannot see is one you cannot
+# put a clip in, and nothing here ships a greeting (see PROVENANCE: no source may be redistributed).
+EVENT_POOLS = ("greeting", "cover/chest", "cover/bottom", "cover/all")
 
 _clients: set[queue.Queue] = set()
 _lock = threading.Lock()
@@ -265,14 +293,43 @@ def music_state() -> dict:
         return {"playing": bool(_music["value"]), "choice": _music_choice}
 
 
+# A switch she set with a lifetime: name -> (value, deadline on the monotonic clock). Kept here
+# and not in the file, because an answer that ends by itself is not one a restart should inherit —
+# the file is what a restart believes.
+_autonomy_for: dict[str, tuple[bool, float]] = {}
+
+
+def _agreed_now(what: str) -> bool:
+    """Whether she is willing to do *what* at this moment. The caller holds `_lock`.
+
+    A switch with a lifetime wins until it runs out; after that the file's answer is hers again,
+    which is why the deadline is read here rather than expired by a timer: nothing has to be
+    running for a temporary no to end.
+    """
+    held = _autonomy_for.get(what)
+    if held is not None:
+        value, deadline = held
+        if time.monotonic() < deadline:
+            return value
+        del _autonomy_for[what]
+    return _autonomy.get(what, AUTONOMY_DEFAULTS.get(what, True))
+
+
+def agreed(what: str) -> bool:
+    """Whether she is willing to do `what` now: `dance`, `blush`, `emotion`, `greeting`, `cover`."""
+    with _lock:
+        return _agreed_now(what)
+
+
 def autonomy_state() -> dict:
     """What she agreed to do on her own. A switch she has not touched is still its default; see
-    AUTONOMY_DEFAULTS for why `dance` is the one that starts off."""
+    AUTONOMY_DEFAULTS for why `dance` is the one that starts off. A switch set with a lifetime
+    reads as what it is right now, so a page that connects mid-way is told the truth."""
     with _lock:
-        return dict(_autonomy)
+        return {name: _agreed_now(name) for name in AUTONOMY}
 
 
-def choose_autonomy(value) -> None:
+def choose_autonomy(value, seconds: float | None = None) -> None:
     """Take {"dance": false, ...} -- any of AUTONOMY, each true or false -- and remember it.
 
     A switch is hers to set, and only the switches that are not at their default are written to
@@ -285,6 +342,10 @@ def choose_autonomy(value) -> None:
     because a state the file disagrees with is worse than no change at all -- the file is what a
     restart will believe. The home folder is made if it is not there yet, which is the usual case
     for a `ZRB_AVATAR_HOME` that only ever held models somewhere else.
+
+    *seconds* makes it temporary: the switch holds for that long and then goes back to what the file
+    says, and nothing is written down, so a restart mid-way comes back to her own answer rather than
+    to a decision she made for a while.
     """
     if not isinstance(value, dict):
         raise ValueError(
@@ -295,33 +356,55 @@ def choose_autonomy(value) -> None:
         raise ValueError(f"no such switch: {', '.join(unknown)}")
     if not all(isinstance(one, bool) for one in value.values()):
         raise ValueError("each autonomy switch is true or false")
+    if seconds is not None and (
+        not isinstance(seconds, (int, float))
+        or isinstance(seconds, bool)
+        or seconds <= 0
+    ):
+        raise ValueError("seconds is how long the switch holds: a number above zero")
     with (
         _autonomy_lock
     ):  # the state, the file and the rollback are one change, not three
         with _lock:
             before = dict(_autonomy)
-            _autonomy.update(value)
+            before_for = dict(_autonomy_for)
+            if seconds is None:
+                _autonomy.update(value)
+                for name in value:
+                    _autonomy_for.pop(name, None)  # a decision replaces a timeout, and vice versa
+            else:
+                deadline = time.monotonic() + seconds
+                for name, one in value.items():
+                    _autonomy_for[name] = (one, deadline)
             # Every switch goes to the pages, because they merge what they are told: a switch that
             # moved back to its default has to be named. The file gets only what she moved.
-            whole = dict(_autonomy)
+            whole = {name: _agreed_now(name) for name in AUTONOMY}
             saved = {
                 name: one
-                for name, one in whole.items()
+                for name, one in _autonomy.items()
                 if one != AUTONOMY_DEFAULTS[name]
             }
+            # A no to covering while she is covering is worth acting on at once, not at the next
+            # look: the pose is hers, so taking it back must not wait for the camera to move.
+            if not _agreed_now("cover") and _pose.get("reflex"):
+                _pose.clear()
+                _send_all(json.dumps({"type": "cover", "pool": None}))
         try:
-            AUTONOMY_FILE.parent.mkdir(parents=True, exist_ok=True)
-            # Written beside it and moved into place, so a reader never sees half a file: the server
-            # is threaded, and a crash mid-write would leave one for the next start to read.
-            half = AUTONOMY_FILE.with_name(AUTONOMY_FILE.name + ".new")
-            half.write_text(json.dumps(saved), encoding="utf-8")
-            half.replace(AUTONOMY_FILE)
+            if seconds is None:
+                AUTONOMY_FILE.parent.mkdir(parents=True, exist_ok=True)
+                # Written beside it and moved into place, so a reader never sees half a file: the
+                # server is threaded, and a crash mid-write would leave one for the next start.
+                half = AUTONOMY_FILE.with_name(AUTONOMY_FILE.name + ".new")
+                half.write_text(json.dumps(saved), encoding="utf-8")
+                half.replace(AUTONOMY_FILE)
         except OSError as e:
             with (
                 _lock
             ):  # not remembered is not taken: the answer stays what the file says
                 _autonomy.clear()
                 _autonomy.update(before)
+                _autonomy_for.clear()
+                _autonomy_for.update(before_for)
             raise ValueError(f"could not remember that ({e}): nothing changed") from e
         broadcast(json.dumps({"type": "autonomy", "value": whole}))
 
@@ -666,6 +749,10 @@ def seed_anims(restore: bool = False, source: Path | None = None) -> list[str]:
     # folder keeps working when it is looked at from another one (and Windows, which would
     # otherwise key it with backslashes).
     shipped = {p.relative_to(source).as_posix(): p for p in source.rglob("*.vrma")}
+    # An event pool is created even though the package ships nothing in it: the folder is where a
+    # greeting of your own goes, and a folder that does not exist is not somewhere to put one.
+    for pool in EVENT_POOLS:
+        (ANIM_HOME / pool).mkdir(parents=True, exist_ok=True)
     if not shipped:
         return []
     template = _template()
@@ -854,22 +941,32 @@ def _answer_a_refused_look(shy: bool) -> None:
     The page has already sent the view, so the answer rides that same round trip. The point of a
     reflex is that it holds when no reply can — zrb busy, out of tokens, or not running at all.
 
-    It is a refusal, not a lock: the user can zoom straight back in, and she covers again. What
-    it costs: a reflex wins over a pose zrb was holding, and her own pose is not put back
-    afterwards, which is what being quicker than a thought means.
+    What she covers with is a folder named for what the look is at, so a clip of her own answers
+    the look it was made for; which clip in it, and when to let go, is the page's. It is a refusal,
+    not a lock: the user can zoom straight back in, and she covers again. What it costs: a reflex
+    wins over whatever her body was doing, and that is not put back afterwards, which is what
+    being quicker than a thought means.
     """
-    if not REFLEX:
+    if not REFLEX or not agreed("cover"):
+        # Not the machine's setting but her own: `cover` is a switch like the others, so a no to
+        # covering holds until she says otherwise (or until the lifetime she gave it runs out), and
+        # a cover already up comes down rather than staying up on a consent she has withdrawn.
+        with _lock:
+            if _pose.get("reflex"):
+                _pose.clear()
+                _send_all(json.dumps({"type": "cover", "pool": None}))
         return
+    pool = cover_for(_view)
     with _lock:
-        held = bool(_pose.get("reflex"))
-        if shy == held:  # the same answer as last time: one pose, not one per event
+        held = _pose.get("pool") if _pose.get("reflex") else None
+        if (pool if shy else None) == held:  # the same answer as last time: one cover per look
             return
         _pose.clear()
         if shy:
-            _pose.update({**COVER, "type": "pose", "hold": True, "reflex": True})
+            _pose.update({"type": "cover", "pool": pool, "reflex": True})
             _send_all(json.dumps(_pose))
         else:
-            _send_all(json.dumps({"type": "pose", "release": True}))
+            _send_all(json.dumps({"type": "cover", "pool": None}))
 
 
 def _replay(client: queue.Queue, chosen: str | None) -> None:
@@ -1021,7 +1118,7 @@ class Handler(BaseHTTPRequestHandler):
         ):  # hers: what she agrees to
             try:
                 choose_autonomy(
-                    event.get("value")
+                    event.get("value"), event.get("seconds")
                 )  # tells the pages itself, and writes the file
             except ValueError as e:
                 return self.send_error(400, str(e))

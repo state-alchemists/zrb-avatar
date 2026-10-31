@@ -26,10 +26,11 @@ app.whenReady().then(() => {
       additionalArguments: [`--face-origin=${origin ?? ''}`], // the origin the preload gives the bridge to
     },
   });
-  // The page asks for the size her reach needs from the current camera; the bottom-right corner
-  // stays put, so she grows from where you left her. The ask is clamped to the work area of the
-  // display she is on, and the window is kept on it: no page can make it enormous or move it
-  // off the screen, and only our own page may ask at all.
+  // The page asks for the size her reach needs from the current camera, and the window grows around
+  // its own centre, which is where she is: turning the camera changes how much room her reach needs,
+  // and anchoring a corner instead slid her across the screen as the width changed. The ask is
+  // clamped to the work area of the display she is on, and the window is kept on it: no page can make
+  // it enormous or move it off the screen, and only our own page may ask at all.
   const fromPage = event => event.sender === win.webContents && ours(event.senderFrame?.url);
   ipcMain.on('resize', (event, w, h) => {
     if (!fromPage(event) || !Number.isInteger(w) || !Number.isInteger(h)) return;
@@ -39,9 +40,10 @@ app.whenReady().then(() => {
       height: Math.min(Math.max(h, MIN_SIZE), area.height),
     };
     const b = win.getBounds();
+    const centre = (from, outer, inner) => Math.round(from + (outer - inner) / 2);
     win.setBounds({
-      x: Math.max(area.x, Math.min(area.x + area.width - size.width, b.x + b.width - size.width)),
-      y: Math.max(area.y, Math.min(area.y + area.height - size.height, b.y + b.height - size.height)),
+      x: Math.max(area.x, Math.min(area.x + area.width - size.width, centre(b.x, b.width, size.width))),
+      y: Math.max(area.y, Math.min(area.y + area.height - size.height, centre(b.y, b.height, size.height))),
       ...size,
     });
   });
