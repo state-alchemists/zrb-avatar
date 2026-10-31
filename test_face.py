@@ -108,8 +108,6 @@ def _hook_for(hooks, name):
     raise AssertionError(f"nothing registered for {name}")
 
 
-import asyncio
-
 lines, face_send = [], face_client.send
 face_client.send = lines.append
 try:
