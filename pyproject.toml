@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zrb-avatar"
-version = "0.1.2"
+version = "0.2.0"
 description = "A 3D avatar for zrb in a small, see-through, always-on-top window"
 readme = "README.md"
 # The same licence zrb itself declares, and a file to go with it: the identifier alone
