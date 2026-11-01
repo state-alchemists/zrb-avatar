@@ -167,6 +167,23 @@ function snapshot(id) {
 // turn, a zrb killed mid-sentence) cannot leave it up for ever.
 const subtitleEl = document.getElementById('subtitle');
 let subtitleHold = 0, subtitleTimer = 0, statusText = '', sentenceUp = false, clearPending = false;
+// The window may hang past an edge of the display — only her anchor is kept on it (app/main.js) —
+// and a line centred on the window would lose its first words out there. Centre it on the part of
+// the window that is on the screen instead, measured from the window's own place on the display.
+function placeSubtitle() {
+  const availLeft = screen.availLeft ?? 0;
+  const availTop = screen.availTop ?? 0;
+  const availWidth = screen.availWidth || innerWidth;
+  const availHeight = screen.availHeight || innerHeight;
+  const left = Math.max(0, availLeft - screenX);
+  const right = Math.max(0, screenX + innerWidth - (availLeft + availWidth));
+  const below = Math.max(0, screenY + innerHeight - (availTop + availHeight));
+  const visible = Math.max(1, innerWidth - left - right);
+  subtitleEl.style.left = `${Math.round(left + visible / 2)}px`;
+  subtitleEl.style.maxWidth = `min(${Math.round(visible * 0.92)}px, 40em)`;
+  subtitleEl.style.bottom = `${30 + Math.round(below)}px`;
+}
+addEventListener('resize', placeSubtitle);
 function hideSubtitle() {
   clearTimeout(subtitleTimer);
   subtitleTimer = 0;
@@ -191,6 +208,7 @@ function showStatus() {
   clearTimeout(subtitleTimer);
   subtitleTimer = 0;
   subtitleEl.textContent = statusText;
+  placeSubtitle();
   subtitleEl.classList.add('on', 'status');
 }
 function setStatus(text) {
@@ -210,6 +228,7 @@ function showSubtitle(msg) {
   clearPending = false;
   subtitleEl.classList.remove('status');
   if (typeof msg.size === 'number' && msg.size > 0) subtitleEl.style.setProperty('--subtitle-size', `${msg.size}px`);
+  placeSubtitle();
   subtitleEl.classList.add('on');
   // Readable for about a second and a half plus a twentieth of a second a letter — the floor under
   // a short line, not its lifetime: the line ends with the voice, see speechEnded above.
