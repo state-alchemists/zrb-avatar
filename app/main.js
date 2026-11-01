@@ -11,6 +11,33 @@ const url = `${base}/?app${model ? `&model=${model}` : ''}`;
 // to that origin alone, and the resize handler checks the asker's own origin as well.
 const origin = (() => { try { return new URL(base).origin; } catch { return null; } })();
 const MIN_SIZE = 160; // the page's own smallest window
+// She stands at the window's middle, and the window is a caption line wide rather than her own
+// width. Keeping all of it on the screen therefore held her a half-window away from the edge;
+// only her anchor has to stay on the display, and the transparent sides may hang past it. A
+// tenth of the display's height is her half-width plus some air — js/framing.js makes her stand
+// 45% of that height, and her body is about a quarter as wide as it is tall.
+const EDGE_HOLD = 0.1;
+// The left edge for a wanted centre: the centre is held EDGE_HOLD inside the work area, which
+// is a negative x whenever the window is wider than twice that.
+const anchorX = (centre, width, area) => {
+  const hold = Math.min(Math.round(area.height * EDGE_HOLD), Math.floor(width / 2));
+  const inside = Math.max(area.x + hold, Math.min(area.x + area.width - hold, centre));
+  return Math.round(inside - width / 2);
+};
+// She stands 45% of the display tall and js/framing.js sizes the window to the reach of every clip
+// rather than to her body, so the empty band under her feet is a fifth of the window and the one
+// above her head about a quarter: measured on this 568x768 window, her feet 158 px above its bottom
+// and her head top 205 px below its top. The bottom may therefore hang past the screen by that
+// fifth, so she can stand on the very bottom edge.
+//
+// The top cannot: macOS will not place a window above the work area at all — asking for a negative y
+// hands back the work area's top, by setBounds, setPosition or an animated move alike (checked on
+// 26.6). So the window stops at the top edge and her head keeps the band above it. Getting her head
+// to the very top would need the page to draw her shifted up inside a window that stays put; not
+// built, and not worth it for the two hundred pixels it buys.
+const EDGE_HANG_BOTTOM = 0.2; // her feet can reach the bottom edge, the window hanging below it
+const anchorY = (y, height, area) => Math.round(Math.max(area.y,
+  Math.min(area.y + area.height - height + Math.round(height * EDGE_HANG_BOTTOM), y)));
 // Clicks pass through the window except on her. Linux can't forward the mouse to a window that
 // ignores it, so there the page would never hear the cursor come back: the window takes clicks.
 const PASS_THROUGH = process.platform === 'win32' || process.platform === 'darwin';
@@ -29,8 +56,9 @@ app.whenReady().then(() => {
   // The page asks for the size her reach needs from the current camera, and the window grows around
   // its own centre, which is where she is: turning the camera changes how much room her reach needs,
   // and anchoring a corner instead slid her across the screen as the width changed. The ask is
-  // clamped to the work area of the display she is on, and the window is kept on it: no page can make
-  // it enormous or move it off the screen, and only our own page may ask at all.
+  // clamped to the work area of the display she is on, and she is kept on it — the window may hang
+  // past the edges (see EDGE_HOLD and EDGE_HANG_*): no page can make it enormous, and only our own
+  // page may ask.
   const fromPage = event => event.sender === win.webContents && ours(event.senderFrame?.url);
   ipcMain.on('resize', (event, w, h) => {
     if (!fromPage(event) || !Number.isInteger(w) || !Number.isInteger(h)) return;
@@ -42,8 +70,8 @@ app.whenReady().then(() => {
     const b = win.getBounds();
     const centre = (from, outer, inner) => Math.round(from + (outer - inner) / 2);
     win.setBounds({
-      x: Math.max(area.x, Math.min(area.x + area.width - size.width, centre(b.x, b.width, size.width))),
-      y: Math.max(area.y, Math.min(area.y + area.height - size.height, centre(b.y, b.height, size.height))),
+      x: anchorX(centre(b.x, b.width, size.width), size.width, area),
+      y: anchorY(centre(b.y, b.height, size.height), size.height, area),
       ...size,
     });
   });
@@ -55,7 +83,8 @@ app.whenReady().then(() => {
   });
   // Dragged by her body: between the page's start and end, the window follows the cursor from
   // where the drag began (the page's own screen coordinates lag behind a moving window), kept on
-  // the display it lands on. A drag the page never ends stops when the window loses focus.
+  // the display it lands on — as an anchor, so the drag reaches the edge and no further. A drag
+  // the page never ends stops when the window loses focus.
   let dragging = null;
   const stopDrag = () => { clearInterval(dragging?.timer); dragging = null; };
   ipcMain.on('drag', (event, on) => {
@@ -71,8 +100,8 @@ app.whenReady().then(() => {
       const area = screen.getDisplayMatching(to).workArea;
       const width = Math.min(b.width, area.width), height = Math.min(b.height, area.height);
       win.setBounds({
-        x: Math.max(area.x, Math.min(area.x + area.width - width, to.x)),
-        y: Math.max(area.y, Math.min(area.y + area.height - height, to.y)),
+        x: anchorX(to.x + b.width / 2, width, area),
+        y: anchorY(to.y, height, area),
         width, height,
       });
     }, 16) };
