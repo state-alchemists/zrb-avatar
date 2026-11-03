@@ -68,10 +68,15 @@ app.whenReady().then(() => {
       height: Math.min(Math.max(h, MIN_SIZE), area.height),
     };
     const b = win.getBounds();
-    const centre = (from, outer, inner) => Math.round(from + (outer - inner) / 2);
+    // Her middle stays where it is. anchorX is handed the point that has to stay on the display —
+    // her own middle, which is also the window's — and takes the half width off itself. It used to
+    // be handed the window's new left edge instead, and took half a width off that: every resize
+    // slid her half a window to the left, so she could be dragged to the right edge and the next
+    // camera move (the caption line's width never changes, so the height did the resizing) threw
+    // her back. The top is placed, not anchored, so there the middle is what is passed on.
     win.setBounds({
-      x: anchorX(centre(b.x, b.width, size.width), size.width, area),
-      y: anchorY(centre(b.y, b.height, size.height), size.height, area),
+      x: anchorX(Math.round(b.x + b.width / 2), size.width, area),
+      y: anchorY(Math.round(b.y + (b.height - size.height) / 2), size.height, area),
       ...size,
     });
   });
