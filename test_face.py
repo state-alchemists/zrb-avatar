@@ -136,6 +136,60 @@ finally:
     face_client.send, face_client.SUBTITLE = face_send, subtitle_on
 assert muted == [{"type": "state", "value": "tool"}], muted
 
+# A run a hook starts — the memory reviewer, a sub-agent, a skill — is not the conversation, and
+# zrb marks it with `nested_run` on every hook payload. Painting its prompt as "thinking" leaves
+# the caption saying the user's turn is still running, because nothing tells the window idle when
+# that run ends: it says so until the user speaks again. Everything outward is skipped for such a
+# run, the approval's answer and emotion included, and the same event from the user's turn paints.
+class _Nested(_Context):
+    event_data = {"nested_run": True}
+
+
+class _Answered(_Context):
+    event_data = {"approved": True}
+
+
+class _NestedAnswered(_Answered):
+    event_data = {"approved": True, "nested_run": True}
+
+
+class _Emotion(_Context):
+    emotion, emotion_source = "happy", "prompt"
+
+
+class _NestedEmotion(_Emotion):
+    event_data = {"nested_run": True}
+
+
+def _painted(context, name):
+    paints, face_send = [], face_client.send
+    registry = _Hooks()
+    face_client.face_hooks(registry)
+    face_client.send = paints.append
+    try:
+        asyncio.run(_hook_for(registry, name)(context))
+    finally:
+        face_client.send = face_send
+    return paints
+
+
+for nested_event in ("USER_PROMPT_SUBMIT", "PRE_TOOL_USE", "PERMISSION_REQUEST", "STOP"):
+    assert _painted(_Nested(), nested_event) == [], nested_event
+assert _painted(_Context(), "PRE_TOOL_USE") == [
+    {"type": "state", "value": "tool"},
+    {"type": "status", "text": "(working…)"},
+]  # the same event from the user's turn: the guard is not a mute button
+if getattr(HookEvent, "PERMISSION_RESOLVED", None) is not None:
+    assert _painted(_NestedAnswered(), "PERMISSION_RESOLVED") == []
+    assert _painted(_Answered(), "PERMISSION_RESOLVED") == [
+        {"type": "state", "value": "tool"}
+    ]
+if getattr(HookEvent, "EMOTION", None) is not None:
+    assert _painted(_NestedEmotion(), "EMOTION") == []
+    assert _painted(_Emotion(), "EMOTION") == [
+        {"type": "emotion", "value": "happy", "source": "prompt"}
+    ]
+
 # The greeting is the pool, not a file name. `greeting/` is a folder of your own clips and the page
 # plays one of them at random; the greeting is asked for by the folder, so a greeting you drop in
 # works without anything knowing what you called it, and `actions/Greeting.vrma` still plays as the

@@ -67,6 +67,10 @@ The glow says what zrb is doing, and the state decides which animations loop.
 | bright red | asking your permission | `PermissionRequest` |
 | bright cyan | speaking | mouth events |
 
+One exception: a run zrb starts inside another one — its memory reviewer, a sub-agent, a skill — is
+not your turn. zrb marks those events, and they are skipped here; without that the glow and the
+caption would sit on thinking after a reply, for as long as nobody spoke.
+
 Also, always:
 
 - **Her face** — she blinks every few seconds, and her eyes are on you (the camera) the way real

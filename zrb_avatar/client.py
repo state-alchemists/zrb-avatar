@@ -184,6 +184,25 @@ def face_hooks(hooks) -> None:
     from zrb.llm.hook.interface import HookResult
     from zrb.llm.hook.types import HookEvent
 
+    def unless_nested(hook):
+        """*hook*, skipped for a run that another run started.
+
+        zrb marks those with `nested_run` on every hook payload. A run a hook starts — the
+        memory reviewer, a sub-agent, a skill — is not the conversation: painting its state
+        leaves the window saying the user's turn is still running, because nothing tells it
+        idle when that run ends, and it says so until the user speaks again. Emotion is the
+        same kind of thing, so it is wrapped the same way. An older zrb marks nothing here,
+        and then nothing is skipped.
+        """
+
+        async def hook_unless_nested(context):
+            data = getattr(context, "event_data", None)
+            if isinstance(data, dict) and data.get("nested_run"):
+                return HookResult()
+            return await hook(context)
+
+        return hook_unless_nested
+
     def to(state: str):
         async def hook(context):
             await asyncio.to_thread(send, {"type": "state", "value": state})
@@ -217,7 +236,7 @@ def face_hooks(hooks) -> None:
         "permission": [HookEvent.PERMISSION_REQUEST],
         "idle": [HookEvent.STOP, HookEvent.STOP_FAILURE, HookEvent.SESSION_START],
     }.items():
-        hooks.add_hook(to(state), events=events)
+        hooks.add_hook(unless_nested(to(state)), events=events)
 
     # The approval wait has its own end. Without this, the "permission" state that
     # PermissionRequest sets stays until the tool finishes — PostToolUse fires at execution, not
@@ -236,7 +255,7 @@ def face_hooks(hooks) -> None:
             )
             return HookResult()
 
-        hooks.add_hook(answered, events=[resolved])
+        hooks.add_hook(unless_nested(answered), events=[resolved])
 
     # zrb's Emotion hook (ZRB_LLM_EMOTION_ENABLED): a VRM preset name, from the user's
     # prompt or zrb's reply. Older zrb has no such event.
@@ -252,4 +271,4 @@ def face_hooks(hooks) -> None:
             await asyncio.to_thread(send, message)
             return HookResult()
 
-        hooks.add_hook(feel, events=[emotion])
+        hooks.add_hook(unless_nested(feel), events=[emotion])
