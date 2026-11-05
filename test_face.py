@@ -1810,10 +1810,22 @@ if shutil.which("node"):
 # runs the plugin's zrb side, so every zrb import it makes is resolved here, against the zrb that
 # is installed.
 PLUGIN = Path(__file__).parent / "zrb_avatar" / "zrb_init.py"
-for node in ast.walk(ast.parse(PLUGIN.read_text(encoding="utf-8"))):
+tree = ast.parse(PLUGIN.read_text(encoding="utf-8"))
+# An import inside an `except` handler is the other layout a name may live under, for a zrb that
+# predates a move: it is meant not to resolve on the zrb installed here, so it is not checked.
+fallbacks = {
+    id(node)
+    for handler in ast.walk(tree)
+    if isinstance(handler, ast.ExceptHandler)
+    for node in ast.walk(handler)
+    if isinstance(node, ast.ImportFrom)
+}
+for node in ast.walk(tree):
     if not isinstance(node, ast.ImportFrom) or not node.module:
         continue
     if node.module != "zrb" and not node.module.startswith("zrb."):
+        continue
+    if id(node) in fallbacks:
         continue
     imported = importlib.import_module(node.module)
     for alias in node.names:
