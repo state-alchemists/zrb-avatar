@@ -1023,10 +1023,16 @@ async def AvatarLook():
         f"{k}: {v}" for k, v in about.items() if v not in (None, False, "")
     )
     try:  # lazy: these load pydantic_ai; and an older zrb may not have them
-        from zrb.llm.agent.run.multimodal_describe import create_image_tool_return
+        from zrb.llm.tool.multimodal_describe import create_image_tool_return
         from zrb.llm.agent.types import BinaryContent
-    except ImportError:
-        return f"Your window shows you ({doing}), but this zrb cannot pass pictures to you."
+    except ImportError as error:
+        # The cause is named, not swallowed: zrb 3.36 moved this helper out of
+        # `zrb.llm.agent.run`, and the old wording ("this zrb cannot pass pictures to
+        # you") reported the move as a limit of zrb — true of no released version.
+        return (
+            f"Your window shows you ({doing}), but the picture could not be"
+            f" attached: {error}"
+        )
     # The shared helper: attached for a model that reads images, its description for a
     # text-only one, else a hint naming LLM_MULTIMODAL_MODEL.
     return await create_image_tool_return(

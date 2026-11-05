@@ -2,6 +2,7 @@ import ast
 import asyncio
 import datetime
 import http.client
+import importlib
 import json
 import os
 import struct
@@ -343,8 +344,6 @@ finally:
 
 # The client's URL is <PREFIX>_AVATAR_URL. The retired <PREFIX>_FACE_URL is not read, so a
 # leftover from a zrb-face setup cannot quietly point her at the old server.
-import importlib  # noqa: E402
-
 saved_env = {k: os.environ.get(k) for k in ("ZRB_AVATAR_URL", "ZRB_FACE_URL")}
 os.environ.pop(server.PREFIX_VAR, None)  # the client follows CFG.ENV_PREFIX, ZRB here
 try:
@@ -1804,5 +1803,20 @@ if shutil.which("node"):
             ["node", "--check", str(TOOLS / script)], capture_output=True, text=True
         )
         assert parsed.returncode == 0, (script, parsed.stderr)
+
+# AvatarLook shows the frame through a helper inside zrb, and that helper has moved once already:
+# 0.3.2 imported it from `zrb.llm.agent.run`, which zrb no longer has, and then reported the
+# ImportError as "this zrb cannot pass pictures to you" — a limit no released zrb had. Nothing else
+# runs the plugin's zrb side, so every zrb import it makes is resolved here, against the zrb that
+# is installed.
+PLUGIN = Path(__file__).parent / "zrb_avatar" / "zrb_init.py"
+for node in ast.walk(ast.parse(PLUGIN.read_text(encoding="utf-8"))):
+    if not isinstance(node, ast.ImportFrom) or not node.module:
+        continue
+    if node.module != "zrb" and not node.module.startswith("zrb."):
+        continue
+    imported = importlib.import_module(node.module)
+    for alias in node.names:
+        assert hasattr(imported, alias.name), (node.module, alias.name)
 
 print("ok")
