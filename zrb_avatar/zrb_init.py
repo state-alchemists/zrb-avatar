@@ -1010,6 +1010,21 @@ def AvatarModel(name: str) -> str:
     return f"Switching to {name}; she changes in a second or two."
 
 
+def _image_tool_return():
+    """zrb's `create_image_tool_return`, from wherever this zrb keeps it.
+
+    zrb 3.30.0 moved it from `zrb.llm.agent.run` to `zrb.llm.tool`, and this plugin
+    declares no minimum zrb, so both layouts have to be read: the current one first,
+    the older one only when that import fails. The signature is the same in both, so
+    which copy answers changes nothing about the call.
+    """
+    try:
+        from zrb.llm.tool.multimodal_describe import create_image_tool_return
+    except ImportError:  # zrb < 3.30.0 keeps the same helper under agent.run
+        from zrb.llm.agent.run.multimodal_describe import create_image_tool_return
+    return create_image_tool_return
+
+
 async def AvatarLook():
     """See your avatar as the user sees it right now: a picture of your window (your body, pose
     and expression, from the user's side), with what you are doing (state, the animation
@@ -1023,10 +1038,15 @@ async def AvatarLook():
         f"{k}: {v}" for k, v in about.items() if v not in (None, False, "")
     )
     try:  # lazy: these load pydantic_ai; and an older zrb may not have them
-        from zrb.llm.agent.run.multimodal_describe import create_image_tool_return
+        create_image_tool_return = _image_tool_return()
         from zrb.llm.agent.types import BinaryContent
-    except ImportError:
-        return f"Your window shows you ({doing}), but this zrb cannot pass pictures to you."
+    except ImportError as error:
+        # The cause is named, not swallowed: a helper that moved inside zrb must read
+        # as a broken import here, not as zrb being unable to show a picture.
+        return (
+            f"Your window shows you ({doing}), but the picture could not be"
+            f" attached: {error}"
+        )
     # The shared helper: attached for a model that reads images, its description for a
     # text-only one, else a hint naming LLM_MULTIMODAL_MODEL.
     return await create_image_tool_return(
