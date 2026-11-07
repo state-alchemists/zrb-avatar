@@ -1,23 +1,22 @@
 name: "Code Review"
 run-name: "Review PR #${{ github.event.pull_request.number }} by ${{ github.actor }}"
 
+# `pull_request_target`, not `pull_request`: this file, and the checkout, resolve
+# from the base branch, so a PR cannot edit the workflow that runs with
+# OPENAI_API_KEY. The head is fetched as a diff and never checked out.
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
 
 jobs:
   review:
-    # Only PRs from a branch of this repository: pushing one takes write access,
-    # so a drive-by PR (from a fork) can't spend tokens on an LLM run, and
-    # GitHub withholds secrets from fork PRs anyway -- skipping beats a red X
-    # nobody can fix. Not author_association, as zrb's own guard adds: an org
-    # member whose membership is private shows up in the event as CONTRIBUTOR,
-    # which skipped every review of this repository's own PRs.
+    # Same-repository branches only, since pushing one takes write access. Read the
+    # head's repo rather than author_association, which reports a private org
+    # membership as CONTRIBUTOR.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
-    # pull-requests: write is what lets submit-comment post the report.
     permissions:
       contents: read
       pull-requests: write
@@ -27,13 +26,14 @@ jobs:
       ZRB_LLM_JOURNAL_ENABLED: "false"
       ZRB_INIT_STRICT: "1"
     steps:
-      - name: Check out repository code
-        uses: actions/checkout@v4
+      - name: Check out the base branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
           cache: pip
@@ -41,9 +41,8 @@ jobs:
       - name: Install zrb
         run: pip install zrb requests
 
-      # The command is fixed here, as in zrb-extras: no reusable workflow taking a command
-      # input to `eval`, which would become a script-injection sink the moment a caller built
-      # that command out of event data (a PR title, a branch name).
+      # The command is fixed here rather than an `eval` of a workflow input, so no
+      # event data can reach a shell that holds the key.
       - name: Review and comment
         shell: bash
         env:
@@ -53,4 +52,13 @@ jobs:
             echo "⏭️  OPENAI_API_KEY is not configured; skipping the LLM review."
             exit 0
           fi
-          zrb submit-comment --range "origin/$GITHUB_BASE_REF...HEAD"
+          git fetch --no-tags origin \
+            "+refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head"
+          # The review prints file contents, and the runner executes log lines that
+          # look like workflow commands; between the markers it reads plain text.
+          stop_token="$(cat /proc/sys/kernel/random/uuid)"
+          echo "::stop-commands::$stop_token"
+          status=0
+          zrb submit-comment --range "origin/$GITHUB_BASE_REF...origin/pr-head" || status=$?
+          echo "::$stop_token::"
+          exit "$status"
