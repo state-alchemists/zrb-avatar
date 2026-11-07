@@ -181,8 +181,7 @@ def _resumes_conversation(context) -> bool:
 
 def face_hooks(hooks) -> None:
     """Register hooks that send idle/thinking/tool/attention/permission, and zrb's emotions, to the face."""
-    from zrb.llm.hook.interface import HookResult
-    from zrb.llm.hook.types import HookEvent
+    from zrb.llm.hook import HookEvent, HookResult
 
     def unless_nested(hook):
         """*hook*, skipped for a run that another run started.

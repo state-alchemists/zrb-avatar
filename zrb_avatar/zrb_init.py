@@ -66,9 +66,9 @@ from zrb.builtin import llm_chat
 from zrb.llm.camera import CameraConfig
 from zrb.llm.camera.backend.builtin import get_camera_backend
 from zrb.llm.camera.feature import capture_photo
-from zrb.llm.hook.interface import HookContext, HookResult
-from zrb.llm.hook.manager import HookManager
-from zrb.llm.hook.types import HookEvent
+# The hook package's parts moved under `contracts/`, and its front door has always re-exported
+# these names: name the package, not a module under it, so the next reshuffle is not our break.
+from zrb.llm.hook import HookContext, HookEvent, HookManager, HookResult
 # zrb moved its shared layer-0 leaves into `zrb.llm.shared`, and this plugin declares no minimum
 # zrb: read the layout that is here. The class is the same code in both spots, so which copy
 # answers changes nothing about the call.
