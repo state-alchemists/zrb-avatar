@@ -18,7 +18,7 @@ from zrb_avatar.client import MOUTH_STEP, Mouth, loudness
 
 # The client compares `context.event == HookEvent.SESSION_START`, and HookEvent is not a string
 # enum: a test context carrying the string "SESSION_START" is not a session start.
-from zrb.llm.hook.types import HookEvent
+from zrb.llm.hook import HookEvent
 
 # Loudness: silence closes the mouth, full scale opens it, one value per step.
 assert loudness(bytes(3840), 24000) == [0.0, 0.0]  # 1920 samples = 2 x 40 ms
