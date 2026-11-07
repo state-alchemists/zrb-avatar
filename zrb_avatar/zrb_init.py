@@ -69,7 +69,13 @@ from zrb.llm.camera.feature import capture_photo
 from zrb.llm.hook.interface import HookContext, HookResult
 from zrb.llm.hook.manager import HookManager
 from zrb.llm.hook.types import HookEvent
-from zrb.llm.input_source import InputProvenance
+# zrb moved its shared layer-0 leaves into `zrb.llm.shared`, and this plugin declares no minimum
+# zrb: read the layout that is here. The class is the same code in both spots, so which copy
+# answers changes nothing about the call.
+try:
+    from zrb.llm.shared.input_source import InputProvenance
+except ImportError:  # a zrb that predates the move keeps it at the top of zrb.llm
+    from zrb.llm.input_source import InputProvenance
 from zrb.llm.speech import SpeechConfig, enable_speech
 from zrb.llm.speech.backend.any_speech_backend import AnySpeechBackend
 from zrb.llm.speech.backend.audio import SpeechAudio
