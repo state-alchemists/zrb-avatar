@@ -1806,13 +1806,26 @@ if shutil.which("node"):
 
 # AvatarLook shows the frame through a helper inside zrb, and that helper has moved once already:
 # 0.3.2 imported it from `zrb.llm.agent.run`, which zrb no longer has, and then reported the
-# ImportError as "this zrb cannot pass pictures to you" — a limit no released zrb had. Nothing else
-# runs the plugin's zrb side, so every zrb import it makes is resolved here, against the zrb that
-# is installed.
+# ImportError as "this zrb cannot pass pictures to you" — a limit no released zrb had. And a zrb
+# that keeps its shared leaves in `llm/shared` broke the plugin at load, at the one import that
+# still named the old spot. Nothing else runs the plugin's zrb side, so every zrb import it makes
+# is resolved here, against the zrb that is installed.
 PLUGIN = Path(__file__).parent / "zrb_avatar" / "zrb_init.py"
 tree = ast.parse(PLUGIN.read_text(encoding="utf-8"))
+
+
+def _resolves(node):
+    try:
+        imported = importlib.import_module(node.module)
+    except ImportError:
+        return False
+    return all(hasattr(imported, alias.name) for alias in node.names)
+
+
 # An import inside an `except` handler is the other layout a name may live under, for a zrb that
-# predates a move: it is meant not to resolve on the zrb installed here, so it is not checked.
+# predates a move: it is meant not to resolve on the zrb installed here, so it is not checked on
+# its own. What it rescues is checked instead — the pair passes when either layout resolves, since
+# which one this zrb has is the whole question the plugin asks.
 fallbacks = {
     id(node)
     for handler in ast.walk(tree)
@@ -1820,6 +1833,30 @@ fallbacks = {
     for node in ast.walk(handler)
     if isinstance(node, ast.ImportFrom)
 }
+parents = {
+    id(child): parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
+}
+
+
+def _rescues(node):
+    """The imports in the handlers of the try whose body holds `node`, where any one may answer."""
+    child = node
+    while id(child) in parents:
+        child = parents[id(child)]
+        if isinstance(child, ast.Try):
+            return [
+                other
+                for handler in child.handlers
+                for other in ast.walk(handler)
+                if isinstance(other, ast.ImportFrom)
+                and other.module
+                and sorted(a.name for a in other.names)
+                == sorted(a.name for a in node.names)
+                and _resolves(other)
+            ]
+    return []
+
+
 for node in ast.walk(tree):
     if not isinstance(node, ast.ImportFrom) or not node.module:
         continue
@@ -1827,8 +1864,6 @@ for node in ast.walk(tree):
         continue
     if id(node) in fallbacks:
         continue
-    imported = importlib.import_module(node.module)
-    for alias in node.names:
-        assert hasattr(imported, alias.name), (node.module, alias.name)
+    assert _resolves(node) or _rescues(node), (node.module, "no layout resolves")
 
 print("ok")
