@@ -1,31 +1,13 @@
 """The CI configuration is what keeps the model key out of a pull request's hands.
 
-`.github/workflows` is the folder that decides what runs with this repository's
-secrets: a workflow chooses its triggers, the token it hands a job and which
-actions that job runs. This repository's default token is `write`, so a job that
-names no `permissions:` inherits write access to the repository rather than
-proving it needs it.
+Read as a checklist, the way `test_face.py` is: five rules, each one careless edit
+away from being untrue.
 
-Five rules hold the boundary up, and each is one careless edit away from being
-untrue:
-
-* a workflow that names a secret is not triggered by `pull_request` — GitHub
-  resolves that workflow, and every local `uses:` inside it, from the pull
-  request's *merge commit*, so the branch could edit the file that runs with the
-  key;
-* no workflow hands a runner the pull request's head — `zrb` loads `zrb_init.py`
-  from the working directory, so a checkout of the head is enough to run the
-  contributor's code with the key in the environment;
-* every external action is pinned to a commit, because a tag is a moving pointer
-  and `@v4` runs whatever it points at today;
-* every runner names an image rather than `-latest`, which resolves to a
-  different image without a commit changing;
-* every workflow declares its own `permissions`, so the repository default is
-  never what a job gets by accident.
-
-Like `test_face.py`, this file is run as a script (`python test_ci.py`) and reads
-as a checklist. The workflows are the tree's CI, not part of the package, so they
-are read here as text rather than imported.
+* a workflow that names a secret is not triggered by `pull_request`;
+* no workflow checks out the pull request's head;
+* every external action is pinned to a commit;
+* every runner names an image rather than `-latest`;
+* every workflow declares its own `permissions`.
 """
 
 import re

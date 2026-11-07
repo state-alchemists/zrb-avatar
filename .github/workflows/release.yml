@@ -1,23 +1,10 @@
-# Push a tag like 0.1.1: runs the suite, opens a GitHub release, publishes the Python package
-# to PyPI, and attaches the desktop app for Windows, macOS and Linux to that release.
+# Push a tag like 0.1.1: runs the suite, opens a GitHub release, publishes the Python
+# package to PyPI, and attaches the desktop app for Windows, macOS and Linux.
 #
-# The suite runs first and gates everything else: a tag is the one input a release cannot take
-# back, because a version on PyPI keeps its number forever. test.yml is called rather than
-# copied, so what guards main is exactly what guards the tag.
-#
-# The release is created next and the two artifacts attach to it afterwards, so neither has to
-# wait for the other: a PyPI problem (a trusted publisher that has not been added yet) must not
-# cost you the desktop app, and a packaging problem must not hold back the package.
-#
-# PyPI publishing uses trusted publishing: add this repository, the workflow `release.yml`
-# and the environment `pypi` as a trusted publisher of the zrb-avatar project on pypi.org.
-# Without it, publish the version by hand (`python -m build && twine upload dist/*`) before
-# tagging: the publish step below notices the version is already there and skips itself, so
-# the tag still produces a green release with the app zips on it.
-#
-# Every action below is pinned to a commit, not a tag: this workflow holds `id-token: write`
-# (an OIDC token PyPI will exchange for an upload) and `contents: write`, so the code it runs
-# has to be the code this file names. test_ci.py fails on an unpinned `uses:`.
+# PyPI publishing uses trusted publishing: add this repository, the workflow
+# `release.yml` and the environment `pypi` as a trusted publisher of the zrb-avatar
+# project on pypi.org. Without it, publish the version by hand before tagging -- the
+# publish step skips a version that is already there.
 name: release
 on:
   push:
@@ -25,8 +12,7 @@ on:
 
 jobs:
   test:
-    # The whole matrix, not one interpreter: the release is the moment a
-    # platform-specific break becomes a bad artifact on someone's machine.
+    # A version on PyPI keeps its number forever, so the suite gates the tag.
     uses: ./.github/workflows/test.yml
     permissions:
       contents: read
@@ -64,9 +50,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      # Pinned: this step's job can mint a PyPI token, so the build tool is part of
-      # what that token trusts.
-      - run: pip install "build==1.6.1"
+      - run: pip install build
       - run: python -m build
 
       # A release has to be safe to re-run: a version that is already on PyPI is not an error.

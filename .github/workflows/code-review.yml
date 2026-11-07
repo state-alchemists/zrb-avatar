@@ -1,23 +1,9 @@
 name: "Code Review"
 run-name: "Review PR #${{ github.event.pull_request.number }} by ${{ github.actor }}"
 
-# `pull_request_target`, not `pull_request`, and that word is the security
-# boundary of this file.
-#
-# GitHub resolves a `pull_request` workflow -- and every local `uses:` inside it --
-# from the pull request's *merge commit*, so a same-repository branch could edit
-# this file and have its own copy run with OPENAI_API_KEY in the environment. The
-# head-repo check below does not help there: the branch that edits the file is in
-# this repository. `pull_request_target` resolves the same files from the base
-# branch, which a pull request cannot change, and still fires the moment the pull
-# request opens -- so the review lands beside the test run, not after it.
-#
-# The rule that makes the switch safe: never run the pull request's code. Check
-# out the base branch and fetch the head as git objects, which zrb reads as a
-# diff. Never add a checkout of the head -- its commit, its branch name or the
-# merge commit -- because `zrb` loads `zrb_init.py` from the working directory,
-# and this very `submit-comment` command is defined in that file.
-# test_ci.py fails on any of them, anywhere under .github/workflows.
+# `pull_request_target`, not `pull_request`: this file, and the checkout, resolve
+# from the base branch, so a PR cannot edit the workflow that runs with
+# OPENAI_API_KEY. The head is fetched as a diff and never checked out.
 on:
   pull_request_target:
     branches:
@@ -25,23 +11,12 @@ on:
 
 jobs:
   review:
-    # Only PRs from a branch of this repository. Under `pull_request_target` a job
-    # holds the secrets whatever the fork, so this is the barrier that keeps a
-    # drive-by PR from spending tokens or reaching the model key: pushing a
-    # same-repository branch takes write access.
-    #
-    # The head's repository, not author_association, which zrb's own review adds:
-    # an org member whose membership is private shows up in the event as
-    # CONTRIBUTOR, which skipped every review of this repository's own PRs.
+    # Same-repository branches only, since pushing one takes write access. Read the
+    # head's repo rather than author_association, which reports a private org
+    # membership as CONTRIBUTOR.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    # Pinned, not `-latest`: the label is a moving pointer, so the OS a green
-    # review was green on is not a fact the commit records. This is what
-    # `ubuntu-latest` resolved to on 2026-11-08.
     runs-on: ubuntu-26.04
     timeout-minutes: 30
-    # Least privilege, named rather than inherited: this repository's default
-    # token is write. pull-requests: write is what lets submit-comment post the
-    # report.
     permissions:
       contents: read
       pull-requests: write
@@ -55,9 +30,6 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          # Named rather than inherited. Under `pull_request_target` GitHub already
-          # resolves the checkout to the base branch; saying it out loud is what
-          # keeps it that way when this file is edited next.
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Set up Python
@@ -66,15 +38,11 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      # Pinned: this install runs with the model key in the environment, so a new
-      # zrb must reach this job through a reviewed diff, not through PyPI.
       - name: Install zrb
-        run: pip install "zrb==3.36.0" "requests==2.34.2"
+        run: pip install zrb requests
 
-      # The command is fixed here, as in zrb-extras: no reusable workflow taking a
-      # command input to `eval`, which would become a script-injection sink the
-      # moment a caller built that command out of event data (a PR title, a branch
-      # name) -- and that code would run with the key in this step's environment.
+      # The command is fixed here rather than an `eval` of a workflow input, so no
+      # event data can reach a shell that holds the key.
       - name: Review and comment
         shell: bash
         env:
@@ -84,13 +52,10 @@ jobs:
             echo "⏭️  OPENAI_API_KEY is not configured; skipping the LLM review."
             exit 0
           fi
-          # The head is fetched as objects and never checked out. `origin/pr-head`
-          # is this pull request's tip; nothing reads the working directory.
           git fetch --no-tags origin \
             "+refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head"
-          # The review prints what its tools read (diffs, file contents), and the
-          # runner executes any log line that looks like a workflow command. Between
-          # these two markers the runner treats the log as plain text.
+          # The review prints file contents, and the runner executes log lines that
+          # look like workflow commands; between the markers it reads plain text.
           stop_token="$(cat /proc/sys/kernel/random/uuid)"
           echo "::stop-commands::$stop_token"
           status=0

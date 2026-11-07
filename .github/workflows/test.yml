@@ -8,39 +8,26 @@ on:
   pull_request:
     branches:
       - main
-  # A tag is the one input a release cannot take back: a broken commit published
-  # to PyPI keeps its version number forever. release.yml runs this workflow at
-  # the tag, before it creates anything, so the suite that guards main guards the
-  # release too -- one definition of "the suite", not a copy of these steps.
+  # release.yml calls this at the tag, so the suite guarding main is exactly the
+  # suite guarding a release.
   workflow_call:
 
-# Least privilege, named rather than inherited. This repository's default token
-# is write, so an undeclared permission set would let a job push to the
-# repository without a line of it changing.
 permissions:
   contents: read
 
 jobs:
   test:
     runs-on: ${{ matrix.os }}
-    # The suite starts a real server and reads an event stream, so a hang is a plausible
-    # failure mode -- and GitHub's default ceiling is 6 hours of runner time.
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        # Pinned images, never `-latest`: the label is a moving pointer, so the OS
-        # a green run was green on is not a fact the commit records. On 2026-11-08
-        # they resolved to ubuntu-26.04, windows-2025-vs2026 and macos-26 (read
-        # from the runner log's `Image:` line). Moving to a new image is then a
-        # reviewable diff; test_ci.py fails on a `-latest` label.
-        # zrb (which client.py and zrb_init.py import) needs 3.11+.
+        # Pinned images, never `-latest` -- test_ci.py enforces it. zrb needs 3.11+.
         os: [ubuntu-26.04]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         include:
-          # The server watches the media player per platform (WSL/Windows, playerctl,
-          # media-control/AppleScript) and the desktop app is packaged differently on
-          # each, so one interpreter each checks the suite still runs there.
+          # The server watches the media player per platform and the desktop app is
+          # packaged differently on each, so one interpreter each.
           - os: windows-2025-vs2026
             python-version: "3.13"
           - os: macos-26
@@ -57,26 +44,18 @@ jobs:
           cache: pip
 
       - name: Install
-        # zrb is deliberately unpinned here: this job exists to answer "does the
-        # plugin still work with the zrb that is on PyPI", and a new release is
-        # supposed to be able to turn it red. flake8 is pinned so a new lint rule
-        # cannot, which would make a red run unattributable.
-        run: pip install -e ".[zrb]" "flake8==7.5.0"
+        # zrb stays unpinned on purpose: a new zrb release is allowed to turn this
+        # job red, because that is the question it asks.
+        run: pip install -e ".[zrb]" flake8
 
       - name: Resolved versions
-        # The run is only debuggable if the log says what it actually tested: an
-        # unpinned install makes a red run indistinguishable from an upstream
-        # release changing under it.
         run: pip freeze | grep -Ei '^(zrb|flake8|requests)='
 
       - name: Lint
-        # Pyflakes-class checks only (unused imports and variables, undefined names), as zrb does.
+        # Pyflakes-class checks only, as zrb does.
         run: flake8 --select=F zrb_avatar test_face.py zrb_init.py test_ci.py
 
       - name: Check the CI configuration
-        # The workflows decide what runs with this repository's secrets, and this
-        # file is read by a human after a red build, so it runs as a script like
-        # test_face.py.
         run: python test_ci.py
 
       - name: Test
