@@ -8,6 +8,17 @@ on:
   pull_request:
     branches:
       - main
+  # A tag is the one input a release cannot take back: a broken commit published
+  # to PyPI keeps its version number forever. release.yml runs this workflow at
+  # the tag, before it creates anything, so the suite that guards main guards the
+  # release too -- one definition of "the suite", not a copy of these steps.
+  workflow_call:
+
+# Least privilege, named rather than inherited. This repository's default token
+# is write, so an undeclared permission set would let a job push to the
+# repository without a line of it changing.
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -18,34 +29,55 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Pinned images, never `-latest`: the label is a moving pointer, so the OS
+        # a green run was green on is not a fact the commit records. On 2026-11-08
+        # they resolved to ubuntu-26.04, windows-2025-vs2026 and macos-26 (read
+        # from the runner log's `Image:` line). Moving to a new image is then a
+        # reviewable diff; test_ci.py fails on a `-latest` label.
         # zrb (which client.py and zrb_init.py import) needs 3.11+.
-        os: [ubuntu-latest]
+        os: [ubuntu-26.04]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         include:
           # The server watches the media player per platform (WSL/Windows, playerctl,
           # media-control/AppleScript) and the desktop app is packaged differently on
           # each, so one interpreter each checks the suite still runs there.
-          - os: windows-latest
+          - os: windows-2025-vs2026
             python-version: "3.13"
-          - os: macos-latest
+          - os: macos-26
             python-version: "3.13"
 
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install
-        run: pip install -e ".[zrb]" flake8
+        # zrb is deliberately unpinned here: this job exists to answer "does the
+        # plugin still work with the zrb that is on PyPI", and a new release is
+        # supposed to be able to turn it red. flake8 is pinned so a new lint rule
+        # cannot, which would make a red run unattributable.
+        run: pip install -e ".[zrb]" "flake8==7.5.0"
+
+      - name: Resolved versions
+        # The run is only debuggable if the log says what it actually tested: an
+        # unpinned install makes a red run indistinguishable from an upstream
+        # release changing under it.
+        run: pip freeze | grep -Ei '^(zrb|flake8|requests)='
 
       - name: Lint
         # Pyflakes-class checks only (unused imports and variables, undefined names), as zrb does.
-        run: flake8 --select=F zrb_avatar test_face.py zrb_init.py
+        run: flake8 --select=F zrb_avatar test_face.py zrb_init.py test_ci.py
+
+      - name: Check the CI configuration
+        # The workflows decide what runs with this repository's secrets, and this
+        # file is read by a human after a red build, so it runs as a script like
+        # test_face.py.
+        run: python test_ci.py
 
       - name: Test
         # Also regenerates every clip in memory and fails if a shipped .vrma is stale.
