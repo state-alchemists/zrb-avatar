@@ -96,23 +96,26 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
-      # Electron's postinstall fetches its own 100 MB binary from GitHub's release CDN, and
-      # that host answered 504 on two attempts four minutes apart. Three tries with a pause
-      # between them costs a minute; a platform with no zip costs a version number.
-      - name: Install
+      # Electron's postinstall fetches its own 100 MB binary, and electron-packager fetches
+      # it again, once per architecture, while packing. GitHub's release CDN answered 504
+      # on both: the 0.3.5 run lost Windows and Linux to it, and 0.3.6's Mac job failed while
+      # packing, after its install had already been retried through. Three tries with a
+      # pause costs a minute; a platform with no zip costs a version number.
+      - name: Install and pack
         run: |
-          for attempt in 1 2 3; do
-            if npm ci; then
-              exit 0
-            fi
-            if [ "$attempt" = 3 ]; then
-              echo "npm ci failed three times" >&2
-              exit 1
-            fi
-            echo "npm ci failed (attempt $attempt of 3); trying again in 30s" >&2
-            sleep 30
-          done
-      - run: npm run pack:${{ matrix.pack }}
+          retry() {
+            for attempt in 1 2 3; do
+              "$@" && return 0
+              if [ "$attempt" = 3 ]; then
+                echo "gave up after 3 attempts: $*" >&2
+                return 1
+              fi
+              echo "attempt $attempt of 3 failed; trying again in 30s: $*" >&2
+              sleep 30
+            done
+          }
+          retry npm ci
+          retry npm run pack:${{ matrix.pack }}
       - name: zip and upload
         run: |
           cd dist
