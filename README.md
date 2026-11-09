@@ -211,17 +211,13 @@ She never interrupts a running turn or her own speech, waits a cooldown between 
 replies `…` (shown, not spoken) when there is nothing worth saying. Her face already shows surprise
 and a blush the moment such a view settles, `view` or not.
 
-### Nudging
+### What is not here
 
-On by default, on its own clock. Every ten minutes a free rule is checked — lunch between 12:00 and
-13:30, bedtime from 22:30, you back at the desk after twenty minutes away, ninety minutes of quiet,
-or a turn that ended in an error. Only when one is true does a turn start, and that turn decides
-whether there is anything worth saying.
-
-- Her hours are her own (`ZRB_AVATAR_NUDGE_HOURS`, 7:00–24:00), because the shared waking hours end
-  at 22:00.
-- What has been said is kept in `<home>/nudge.json`, so a restart does not say it twice.
-- `ZRB_AVATAR_NUDGE=off` turns it off.
+Reminders on a clock — lunch, bedtime, anything the agent is asked to remember — are
+[zrb-nudge](https://github.com/state-alchemists/zrb-nudge)'s: its own JSON file, `AddSchedule` and
+`RemoveSchedule` for the agent, and a trigger that reads the file. This package knows whether
+someone is at the desk, which is what a reminder is worth checking against before it is said: a
+nudge turn asks for `AvatarStatus` first and stays quiet when nobody is there.
 
 ## What she knows
 
@@ -484,15 +480,7 @@ command run without zrb, so their names are fixed.
 | `ZRB_AVATAR_IDLE_MINUTES` | `45` | `zrb_init.py` | Quiet minutes before `idle` speaks. |
 | `ZRB_AVATAR_COOLDOWN` | `1200` | `zrb_init.py` | Seconds between conversations she starts herself. |
 | `ZRB_AVATAR_PROACTIVE_PROMPT` | `Say something short and natural only if it is worth saying; otherwise reply exactly {nothing_to_say}` | `zrb_init.py` | The instruction added to a turn she starts, after the situation it answers. `{nothing_to_say}` is the one placeholder it reads; an empty value asks for nothing at all, so a white-labeled avatar can ask for another voice. |
-| `ZRB_AVATAR_AWAKE_HOURS` | `8-22` | `zrb_init.py` | Hours the talk-first sources may speak (`idle`, `camera`, `view`). Not the nudge's: see below. |
-| `ZRB_AVATAR_NUDGE` | `auto` | `zrb_init.py` | The nudge: `auto` checks its rules and offers a turn when one is true, `off` never does. |
-| `ZRB_AVATAR_NUDGE_SECONDS` | `600` | `zrb_init.py` | Seconds between checking those rules — free, no model call. |
-| `ZRB_AVATAR_NUDGE_HOURS` | `7-24` | `zrb_init.py` | Hours the nudge may speak, as `first-last`; 24 is the end of the day. |
-| `ZRB_AVATAR_NUDGE_LUNCH` | `12:00-13:30` | `zrb_init.py` | The lunch reminder's window. |
-| `ZRB_AVATAR_NUDGE_BED` | `22:30-24:00` | `zrb_init.py` | The bedtime reminder's window. |
-| `ZRB_AVATAR_NUDGE_QUIET` | `90` | `zrb_init.py` | Quiet minutes before that is worth asking about. |
-| `ZRB_AVATAR_NUDGE_AWAY` | `20` | `zrb_init.py` | Minutes away that make coming back worth noticing. |
-| `ZRB_AVATAR_NUDGE_BACK` | `10` | `zrb_init.py` | Minutes after coming back that "you are back" stays true. |
+| `ZRB_AVATAR_AWAKE_HOURS` | `8-22` | `zrb_init.py` | Hours the talk-first sources may speak (`idle`, `camera`, `view`). |
 | `ZRB_AVATAR_CAMERA_INTERVAL` | `20` | `zrb_init.py` | Seconds between camera looks; each one lights the camera. |
 | `ZRB_AVATAR_CAMERA_PRESENT_BYTES` | `25000` | `zrb_init.py` | Photo size above which someone counts as present; tune it for your camera and room. |
 | `ZRB_AVATAR_MOUTH_GAIN` | `4` | `client.py` | How wide the mouth opens for a given loudness: raise it if the mouth barely opens, lower it if it stays wide open. |
@@ -500,7 +488,7 @@ command run without zrb, so their names are fixed.
 | `ZRB_AVATAR_URL` | `http://127.0.0.1:7777/event` | `client.py` | Where zrb sends events. |
 | `ZRB_AVATAR_HOST` | `127.0.0.1` | server | The address the server listens on. |
 | `ZRB_AVATAR_PORT` | `7777` | server, `zrb-avatar` | The server's port (change `ZRB_AVATAR_URL` to match). |
-| `ZRB_AVATAR_HOME` | `~/.zrb/avatar` | server, `zrb_init.py` | Your folder: models in `models/`, animations in `anim/`, and her own answers — `autonomy.json` (what she agreed to do unasked), `model` (the model she last chose) and `nudge.json` (today's nudges, so a restart does not repeat them). |
+| `ZRB_AVATAR_HOME` | `~/.zrb/avatar` | server, `zrb_init.py` | Your folder: models in `models/`, animations in `anim/`, and her own answers — `autonomy.json` (what she agreed to do unasked) and `model` (the model she last chose). |
 | `ZRB_AVATAR_MODELS` | empty | server | More model folders, searched before `<home>/models`; separated by `:` (`;` on Windows). `~` is expanded. |
 | `ZRB_AVATAR_ANIMS` | empty | server, `zrb_init.py` | More animation folders, searched before `<home>/anim` and the shipped ones. |
 | `ZRB_AVATAR_MUSIC` | `auto` | server | `auto` dances while media plays — Windows' media controls (also from WSL), `playerctl` on Linux, or `media-control` (else Spotify/Music by AppleScript) on macOS; `off` only dances on `zrb-avatar music on`. |

@@ -1,6 +1,5 @@
 import ast
 import asyncio
-import datetime
 import http.client
 import importlib
 import json
@@ -1594,92 +1593,30 @@ try:
     assert face_client.consents("greeting") is True
 finally:
     face_client.AVATAR_URL = saved_lib_url
-# The nudge: its own hours and its own ledger. The rules are cheap and answerable every ten
-# minutes; the turn they start is where the model decides whether it is worth saying anything.
-face_zrb.NUDGE_FILE = user / "nudge.json"
-
-
-def clock(hour, minute=0):
-    return datetime.datetime(2026, 10, 26, hour, minute)
-
-
-# Lunch, once a day, inside its own window and not outside it.
-assert face_zrb.nudge_candidate(clock(11, 59), {}) is None
-assert face_zrb.nudge_candidate(clock(12, 30), {})[0] == "lunch"
-assert face_zrb.nudge_candidate(clock(12, 30), {"lunch": True}) is None
-assert face_zrb.nudge_candidate(clock(13, 45), {}) is None  # the window closes
-# Bedtime is after AWAKE_HOURS ends, which is why the nudge cannot use the shared gate: at 23:00
-# `_may_speak_first` says no for every other source, and "go to bed" is exactly that hour.
-assert face_zrb.nudge_candidate(clock(23), {})[0] == "bed"
-assert face_zrb.nudge_candidate(clock(2), {}) is None  # and 2am is not a time to nudge
-assert 23 not in face_zrb.AWAKE_HOURS and 23 in face_zrb.NUDGE_HOURS
-face_zrb._companion["last_proactive"] = time.monotonic() - 2 * face_zrb.COOLDOWN_SECONDS
-face_zrb._companion["busy"] = False
-# Whether something is speaking is the runner's business, not this test's, and in CI it is not
-# always false -- the hour is the half being checked, so the others are held still.
-real_is_speaking, face_zrb.is_speaking = face_zrb.is_speaking, lambda: False
-try:
-    assert face_zrb._may_nudge(clock(23)) is True
-    assert face_zrb._may_nudge(clock(2)) is False
-finally:
-    face_zrb.is_speaking = real_is_speaking
-face_zrb._companion["last_proactive"] = time.monotonic() - 2 * face_zrb.COOLDOWN_SECONDS
-# A turn that ended in an error is worth a word, once per such turn; a normal stop is not.
-face_zrb._companion["failed"] = 2
-assert face_zrb.nudge_candidate(clock(15), {"failed": 1})[0] == "failure"
-assert face_zrb.nudge_candidate(clock(15), {"failed": 2}) is None
-face_zrb._companion["failed"] = 0
-# Quiet: after NUDGE_QUIET_MINUTES, and not again until its own wait has passed.
-face_zrb._companion["last_user_turn"] = time.monotonic() - 95 * 60
-assert face_zrb.nudge_candidate(clock(15), {})[0] == "quiet"
-assert face_zrb.nudge_candidate(clock(15), {"quiet": time.time()}) is None
-assert (
-    face_zrb.nudge_candidate(clock(15), {"quiet": time.time() - 91 * 60})[0] == "quiet"
+# Every reminder is zrb-nudge's now: its own file, its own trigger, its own tools. What is left
+# here is the one thing a reminder needs from a face -- whether someone is at the desk -- and the
+# nudge must not come back by accident, or a lunch would be said twice.
+assert not hasattr(face_zrb, "nudge_watch")
+assert not any(
+    getattr(trigger, "__name__", "") == "nudge_watch"
+    for trigger in face_zrb.llm_chat.triggers
 )
-face_zrb._companion["last_user_turn"] = time.monotonic()
-# Back at the desk after twenty minutes away -- and only while that is still true: ten minutes
-# later the moment has passed, and saying "you are back" would be a lie about the present.
-face_zrb._face.update(
-    {
-        "present": True,
-        "present_since": time.monotonic(),
-        "away_since": time.monotonic() - 30 * 60,
-    }
-)
-assert face_zrb.nudge_candidate(clock(15), {})[0] == "return"
-face_zrb._face["present_since"] = time.monotonic() - 20 * 60
-assert face_zrb.nudge_candidate(clock(15), {}) is None
-face_zrb._face.update({"present": None, "present_since": None, "away_since": None})
-# The ledger: written down as it is used, read back after a restart, and emptied when the day
-# turns over -- zrb restarted at 13:00 must not mention lunch a second time.
-face_zrb._nudge.update({"date": "", "said": {}})
-assert face_zrb._nudge_day(clock(12, 30)) == {}
-face_zrb._nudge["said"]["lunch"] = True
-face_zrb._nudge_save()
-face_zrb._nudge.update({"date": "", "said": {}})  # as if the chat had just started
-assert face_zrb._nudge_day(clock(12, 31)) == {"lunch": True}
-assert face_zrb._nudge_day(clock(0, 1).replace(day=27)) == {}  # a new day starts empty
-assert face_zrb.NUDGE in ("auto", "off")
-assert face_zrb.nudge_watch in face_zrb.llm_chat.triggers
-# Every hour and window above is a setting, not a constant in the file, and a value that does not
-# look like the example falls back to the default rather than taking the nudge down with it.
+assert not [name for name in dir(face_zrb) if name.startswith("NUDGE")]
+assert face_zrb.AvatarStatus().startswith("face — presence: ")
+# An hour range is still a setting, and a value that does not look like the example falls back to
+# the default rather than taking the hours away.
 var = lambda name: f"{face_zrb.CFG.ENV_PREFIX}_AVATAR_{name}"  # noqa: E731
-assert face_zrb._hours("NUDGE_HOURS", "7-24") == range(7, 24)
-assert face_zrb._window("NUDGE_BED", "22:30-24:00") == (22 * 60 + 30, 24 * 60)
-assert face_zrb._window("NUDGE_LUNCH", "12:00-13:30") == (12 * 60, 13 * 60 + 30)
-os.environ[var("NUDGE_HOURS")] = "9-18"
+assert face_zrb._hours("AWAKE_HOURS", "8-22") == range(8, 22)
+os.environ[var("AWAKE_HOURS")] = "9-18"
 try:
-    assert face_zrb._hours("NUDGE_HOURS", "7-24") == range(9, 18)  # a working day only
+    assert face_zrb._hours("AWAKE_HOURS", "8-22") == range(9, 18)  # a working day only
 finally:
-    del os.environ[var("NUDGE_HOURS")]
-os.environ[var("NUDGE_BED")] = "half past ten"
+    del os.environ[var("AWAKE_HOURS")]
+os.environ[var("AWAKE_HOURS")] = "eight to ten"
 try:
-    assert face_zrb._window("NUDGE_BED", "22:30-24:00") == (
-        22 * 60 + 30,
-        24 * 60,
-    )  # the default
+    assert face_zrb._hours("AWAKE_HOURS", "8-22") == range(8, 22)  # the default
 finally:
-    del os.environ[var("NUDGE_BED")]
+    del os.environ[var("AWAKE_HOURS")]
 
 # A refused look: her body answers on its own, on the round trip the view event already makes, and
 # lets go when the look does. One pose per look, not one per event, however many the page sends.
