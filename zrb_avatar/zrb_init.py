@@ -39,26 +39,19 @@ Settings (the prefix follows zrb's CFG.ENV_PREFIX, ZRB by default):
   ZRB_AVATAR_PRESENCE_SECONDS  seconds without input that still count as at the desk (300)
   ZRB_AVATAR_MODEL_SECONDS     seconds between asking the server which avatar is
                              showing and whether music plays (5)
-  ZRB_AVATAR_NUDGE             the nudge, her own clock: "auto" (default) offers a
-                             turn when a rule says there is something to ask
-                             about (back at the desk, quiet, the last turn
-                             failed); "off" turns it off. Clock reminders --
-                             lunch, bedtime -- are zrb-nudge's: another package,
-                             another file (zrb_nudge/zrb_init.py)
-  ZRB_AVATAR_NUDGE_SECONDS     seconds between looking at those rules (600)
-  ZRB_AVATAR_NUDGE_QUIET       quiet minutes before "quiet" is worth asking about (90)
-  ZRB_AVATAR_NUDGE_AWAY        minutes away that make coming back worth noticing (20)
-  ZRB_AVATAR_NUDGE_BACK        minutes that "you are back" stays true (10)
 
 Knowing is not speaking. The camera, the avatar showing and the music are written down
 whatever ZRB_AVATAR_TALK_FIRST says, and reach every turn as one line of context under "face —"
 (see _ambient_line); a turn she starts is a separate decision, gated as it always was.
 AvatarStatus answers the same thing on demand.
+
+Reminders on a clock are not here: lunch, bedtime and the rest are zrb-nudge's -- its own
+file, its own trigger, its own tools. What this file knows is whether someone is at the desk,
+which is what a reminder is worth checking against before it is said.
 """
 
 import asyncio
 import datetime
-import json
 import os
 import sys
 import time
@@ -97,7 +90,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("_ZRB_ENV_PREFIX", CFG.ENV_PREFIX)
 from zrb_avatar.client import ask, face_hooks, send, snapshot, with_mouth  # noqa: E402
 from zrb_avatar.idle import LastInput  # noqa: E402
-from zrb_avatar.server import HOME, clips, playable, short_name  # noqa: E402
+from zrb_avatar.server import clips, playable, short_name  # noqa: E402
 
 
 def _setting(name: str, default: str) -> str:
@@ -146,34 +139,13 @@ SIDES = {
     "above": "above",
 }
 AWAKE_HOURS = _hours("AWAKE_HOURS", "8-22")
-# The nudge keeps its own hours. AWAKE_HOURS is shared by every talk-first path and ends at 22:00
-# by default, while "the user has been quiet for two hours" is as true at 23:00 as at noon.
-NUDGE = _setting("NUDGE", "auto").strip().lower()  # auto | off
-NUDGE_HOURS = _hours("NUDGE_HOURS", "7-24")
-NUDGE_SECONDS = float(
-    _setting("NUDGE_SECONDS", "600")
-)  # how often the rules are looked at
-NUDGE_QUIET_MINUTES = float(_setting("NUDGE_QUIET", "90"))
-NUDGE_AWAY_MINUTES = float(_setting("NUDGE_AWAY", "20"))
-NUDGE_BACK_MINUTES = float(
-    _setting("NUDGE_BACK", "10")
-)  # how long "you are back" stays true
-NUDGE_FILE = HOME / "nudge.json"  # the day's ledger: a restart is not a memory wipe
-NUDGE_RULES = (
-    "failure",
-    "return",
-    "quiet",
-    "failed",
-)  # "failed" is a count
 NOTHING_TO_SAY = "…"
 _companion = {
     "busy": False,
     "last_user_turn": time.monotonic(),
     "last_proactive": 0.0,
     "last_view": 0.0,
-    "failed": 0,
 }
-_nudge = {"date": "", "said": {}}  # today's ledger, read in _nudge_day
 
 # What the face last reported, and when. The sensing loop writes this whether or not a turn
 # follows, so what she knows does not depend on whether she was allowed to speak.
@@ -242,12 +214,8 @@ def _track_busy(hooks: HookManager) -> None:
         _companion["last_user_turn"] = time.monotonic()
         return HookResult()
 
-    async def on_stop(context: HookContext) -> HookResult:
+    async def on_stop(_: HookContext) -> HookResult:
         _companion["busy"] = False
-        if (
-            context.event == HookEvent.STOP_FAILURE
-        ):  # an error, not a normal stop: worth a word
-            _companion["failed"] += 1
         return HookResult()
 
     hooks.add_hook(on_start, events=[HookEvent.USER_PROMPT_SUBMIT])
@@ -261,125 +229,6 @@ def _may_speak_first() -> bool:
         and datetime.datetime.now().hour in AWAKE_HOURS
         and time.monotonic() - _companion["last_proactive"] > COOLDOWN_SECONDS
     )
-
-
-def _may_nudge(now: datetime.datetime) -> bool:
-    """Its own gate, with NUDGE_HOURS instead of AWAKE_HOURS: quiet and a return are worth
-    mentioning after the hours every other talk-first path keeps."""
-    return (
-        not _companion["busy"]
-        and not is_speaking()
-        and now.hour in NUDGE_HOURS
-        and time.monotonic() - _companion["last_proactive"] > COOLDOWN_SECONDS
-    )
-
-
-def _nudge_save() -> None:
-    """Write the day's ledger beside itself and move it into place: a half file would read as a
-    day with nothing said, and start the day over."""
-    try:
-        NUDGE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        half = NUDGE_FILE.with_name(NUDGE_FILE.name + ".new")
-        half.write_text(json.dumps(_nudge), encoding="utf-8")
-        half.replace(NUDGE_FILE)
-    except (
-        OSError
-    ) as e:  # a read-only home: this session remembers, the next one starts fresh
-        print(f"not remembering nudges: {e}")
-
-
-def _nudge_day(now: datetime.datetime) -> dict:
-    """Today's ledger: what the rules have already used, read once when the day turns over.
-
-    Kept on disk so a restart does not start the day again -- zrb restarted at 13:00 should not
-    ask about the quiet a second time.
-    """
-    today = now.strftime("%Y-%m-%d")
-    if _nudge["date"] == today:
-        return _nudge["said"]
-    saved: dict = {}
-    try:
-        read = json.loads(NUDGE_FILE.read_text(encoding="utf-8"))
-        if (
-            isinstance(read, dict)
-            and read.get("date") == today
-            and isinstance(read.get("said"), dict)
-        ):
-            saved = {k: v for k, v in read["said"].items() if k in NUDGE_RULES}
-    except (OSError, ValueError):
-        pass  # no ledger, or not one of ours: the day starts empty, which is today's behaviour
-    _nudge["date"], _nudge["said"] = today, saved
-    _nudge_save()  # rolled over, so yesterday's entries cannot come back
-    return _nudge["said"]
-
-
-def _due(said: dict, rule: str, minutes: float) -> bool:
-    """Whether a rule that repeats may speak again: never said, or said longer ago than `minutes`."""
-    last = said.get(rule)
-    return not isinstance(last, (int, float)) or time.time() - last >= minutes * 60
-
-
-def _back_after() -> float:
-    """How long the user was away, when they are back now and gone long enough to notice; 0
-    otherwise. The moment passes: ten minutes later, "you are back" is no longer true.
-    """
-    present_since, away_since = _face["present_since"], _face["away_since"]
-    if not (
-        _face["present"] and present_since and away_since and present_since > away_since
-    ):
-        return 0.0
-    if time.monotonic() - present_since > NUDGE_BACK_MINUTES * 60:
-        return 0.0
-    away = (present_since - away_since) / 60
-    return away if away >= NUDGE_AWAY_MINUTES else 0.0
-
-
-def nudge_candidate(now: datetime.datetime, said: dict) -> tuple[str, str] | None:
-    """What is worth a turn, or None: the cheap half of the nudge.
-
-    Rules, not a model, because this has to be answerable every NUDGE_SECONDS without spending
-    anything. Whether it is worth saying is the turn's own question, and NOTHING_TO_SAY is a real
-    answer to it. The ledger is what stops a rule repeating inside its own wait.
-
-    What is left here is what only the face and the turns can know: a failed turn, the user coming
-    back, and quiet. The clock reminders -- lunch, bedtime -- are zrb-nudge's, which keeps its own
-    file and its own trigger; this one must not answer them, or the same lunch is said twice.
-    """
-    if now.hour not in NUDGE_HOURS:
-        return None
-    if _companion["failed"] > said.get("failed", 0):
-        return "failure", "The last turn ended in an error rather than a normal stop."
-    away = _back_after()
-    if away and _due(said, "return", NUDGE_AWAY_MINUTES):
-        return "return", f"The user was away for {int(away)} minutes and is back."
-    quiet = (time.monotonic() - _companion["last_user_turn"]) / 60
-    if quiet >= NUDGE_QUIET_MINUTES and _due(said, "quiet", NUDGE_QUIET_MINUTES):
-        return "quiet", f"The user has been quiet for {int(quiet)} minutes."
-    return None
-
-
-async def nudge_watch():
-    """A turn offered every NUDGE_SECONDS, when a rule says there is something to ask about.
-
-    Two halves on purpose: the rules cost nothing and run every ten minutes; the turn they start is
-    where the model decides whether it is worth saying anything at all, and a reply of
-    NOTHING_TO_SAY is shown as … and spoken as nothing. The ledger is written before the turn, so a
-    turn that errors, or a restart while it runs, cannot make the same nudge twice.
-    """
-    if NUDGE == "off":
-        return
-    while True:
-        await asyncio.sleep(NUDGE_SECONDS)
-        now = datetime.datetime.now()
-        said = _nudge_day(now)
-        candidate = nudge_candidate(now, said)
-        if candidate is None or not _may_nudge(now):
-            continue
-        rule, text = candidate
-        said[rule] = time.time()
-        said["failed"] = _companion["failed"]
-        _nudge_save()
-        yield _proactive(text, "nudge")
 
 
 def _proactive(text: str, channel: str, attachments: tuple = ()) -> TriggerInput:
@@ -1067,5 +916,3 @@ for tool in (
 # loop carries every source that used to have its own.
 llm_chat.append_hook_factory(_track_busy)
 llm_chat.append_trigger(sense_watch)
-# The nudge: its own clock, and its own hours -- see NUDGE_HOURS. `ZRB_AVATAR_NUDGE=off` turns it off.
-llm_chat.append_trigger(nudge_watch)
