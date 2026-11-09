@@ -1603,15 +1603,13 @@ def clock(hour, minute=0):
     return datetime.datetime(2026, 10, 26, hour, minute)
 
 
-# Lunch, once a day, inside its own window and not outside it.
-assert face_zrb.nudge_candidate(clock(11, 59), {}) is None
-assert face_zrb.nudge_candidate(clock(12, 30), {})[0] == "lunch"
-assert face_zrb.nudge_candidate(clock(12, 30), {"lunch": True}) is None
-assert face_zrb.nudge_candidate(clock(13, 45), {}) is None  # the window closes
-# Bedtime is after AWAKE_HOURS ends, which is why the nudge cannot use the shared gate: at 23:00
-# `_may_speak_first` says no for every other source, and "go to bed" is exactly that hour.
-assert face_zrb.nudge_candidate(clock(23), {})[0] == "bed"
-assert face_zrb.nudge_candidate(clock(2), {}) is None  # and 2am is not a time to nudge
+# The clock reminders are zrb-nudge's now -- its own file, its own trigger -- so this one must stay
+# quiet at those hours: two triggers answering the same lunch would say it twice.
+assert face_zrb.nudge_candidate(clock(12, 30), {}) is None
+assert face_zrb.nudge_candidate(clock(23), {}) is None
+assert face_zrb.nudge_candidate(clock(2), {}) is None  # 2am is not a time to nudge either
+# Its hours are still its own: at 23:00 `_may_speak_first` says no for every other source, while
+# "the user has been quiet for two hours" is as true then as at noon.
 assert 23 not in face_zrb.AWAKE_HOURS and 23 in face_zrb.NUDGE_HOURS
 face_zrb._companion["last_proactive"] = time.monotonic() - 2 * face_zrb.COOLDOWN_SECONDS
 face_zrb._companion["busy"] = False
@@ -1651,35 +1649,31 @@ face_zrb._face["present_since"] = time.monotonic() - 20 * 60
 assert face_zrb.nudge_candidate(clock(15), {}) is None
 face_zrb._face.update({"present": None, "present_since": None, "away_since": None})
 # The ledger: written down as it is used, read back after a restart, and emptied when the day
-# turns over -- zrb restarted at 13:00 must not mention lunch a second time.
+# turns over -- zrb restarted at 13:00 must not ask about the quiet a second time.
 face_zrb._nudge.update({"date": "", "said": {}})
 assert face_zrb._nudge_day(clock(12, 30)) == {}
-face_zrb._nudge["said"]["lunch"] = True
+stamp = time.time()
+face_zrb._nudge["said"]["quiet"] = stamp
 face_zrb._nudge_save()
 face_zrb._nudge.update({"date": "", "said": {}})  # as if the chat had just started
-assert face_zrb._nudge_day(clock(12, 31)) == {"lunch": True}
+assert face_zrb._nudge_day(clock(12, 31)) == {"quiet": stamp}
 assert face_zrb._nudge_day(clock(0, 1).replace(day=27)) == {}  # a new day starts empty
 assert face_zrb.NUDGE in ("auto", "off")
 assert face_zrb.nudge_watch in face_zrb.llm_chat.triggers
-# Every hour and window above is a setting, not a constant in the file, and a value that does not
-# look like the example falls back to the default rather than taking the nudge down with it.
+# Every hour above is a setting, not a constant in the file, and a value that does not look like
+# the example falls back to the default rather than taking the nudge down with it.
 var = lambda name: f"{face_zrb.CFG.ENV_PREFIX}_AVATAR_{name}"  # noqa: E731
 assert face_zrb._hours("NUDGE_HOURS", "7-24") == range(7, 24)
-assert face_zrb._window("NUDGE_BED", "22:30-24:00") == (22 * 60 + 30, 24 * 60)
-assert face_zrb._window("NUDGE_LUNCH", "12:00-13:30") == (12 * 60, 13 * 60 + 30)
 os.environ[var("NUDGE_HOURS")] = "9-18"
 try:
     assert face_zrb._hours("NUDGE_HOURS", "7-24") == range(9, 18)  # a working day only
 finally:
     del os.environ[var("NUDGE_HOURS")]
-os.environ[var("NUDGE_BED")] = "half past ten"
+os.environ[var("NUDGE_HOURS")] = "seven to midnight"
 try:
-    assert face_zrb._window("NUDGE_BED", "22:30-24:00") == (
-        22 * 60 + 30,
-        24 * 60,
-    )  # the default
+    assert face_zrb._hours("NUDGE_HOURS", "7-24") == range(7, 24)  # the default
 finally:
-    del os.environ[var("NUDGE_BED")]
+    del os.environ[var("NUDGE_HOURS")]
 
 # A refused look: her body answers on its own, on the round trip the view event already makes, and
 # lets go when the look does. One pose per look, not one per event, however many the page sends.

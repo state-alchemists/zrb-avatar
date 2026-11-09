@@ -213,15 +213,19 @@ and a blush the moment such a view settles, `view` or not.
 
 ### Nudging
 
-On by default, on its own clock. Every ten minutes a free rule is checked — lunch between 12:00 and
-13:30, bedtime from 22:30, you back at the desk after twenty minutes away, ninety minutes of quiet,
-or a turn that ended in an error. Only when one is true does a turn start, and that turn decides
-whether there is anything worth saying.
+On by default, on its own clock. Every ten minutes a free rule is checked — you back at the desk
+after twenty minutes away, ninety minutes of quiet, or a turn that ended in an error. Only when one
+is true does a turn start, and that turn decides whether there is anything worth saying.
 
 - Her hours are her own (`ZRB_AVATAR_NUDGE_HOURS`, 7:00–24:00), because the shared waking hours end
   at 22:00.
 - What has been said is kept in `<home>/nudge.json`, so a restart does not say it twice.
 - `ZRB_AVATAR_NUDGE=off` turns it off.
+
+The clock reminders — lunch, bedtime — are not here. They are
+[zrb-nudge](https://github.com/state-alchemists/zrb-nudge)'s: its own JSON file, `AddSchedule` and
+`RemoveSchedule` for the agent, and a trigger that reads the file. What stays here is what only the
+face and the turns can know. With both loaded, each speaks for what it knows.
 
 ## What she knows
 
@@ -485,11 +489,9 @@ command run without zrb, so their names are fixed.
 | `ZRB_AVATAR_COOLDOWN` | `1200` | `zrb_init.py` | Seconds between conversations she starts herself. |
 | `ZRB_AVATAR_PROACTIVE_PROMPT` | `Say something short and natural only if it is worth saying; otherwise reply exactly {nothing_to_say}` | `zrb_init.py` | The instruction added to a turn she starts, after the situation it answers. `{nothing_to_say}` is the one placeholder it reads; an empty value asks for nothing at all, so a white-labeled avatar can ask for another voice. |
 | `ZRB_AVATAR_AWAKE_HOURS` | `8-22` | `zrb_init.py` | Hours the talk-first sources may speak (`idle`, `camera`, `view`). Not the nudge's: see below. |
-| `ZRB_AVATAR_NUDGE` | `auto` | `zrb_init.py` | The nudge: `auto` checks its rules and offers a turn when one is true, `off` never does. |
+| `ZRB_AVATAR_NUDGE` | `auto` | `zrb_init.py` | The nudge: `auto` checks its rules and offers a turn when one is true, `off` never does. The clock reminders are zrb-nudge's. |
 | `ZRB_AVATAR_NUDGE_SECONDS` | `600` | `zrb_init.py` | Seconds between checking those rules — free, no model call. |
 | `ZRB_AVATAR_NUDGE_HOURS` | `7-24` | `zrb_init.py` | Hours the nudge may speak, as `first-last`; 24 is the end of the day. |
-| `ZRB_AVATAR_NUDGE_LUNCH` | `12:00-13:30` | `zrb_init.py` | The lunch reminder's window. |
-| `ZRB_AVATAR_NUDGE_BED` | `22:30-24:00` | `zrb_init.py` | The bedtime reminder's window. |
 | `ZRB_AVATAR_NUDGE_QUIET` | `90` | `zrb_init.py` | Quiet minutes before that is worth asking about. |
 | `ZRB_AVATAR_NUDGE_AWAY` | `20` | `zrb_init.py` | Minutes away that make coming back worth noticing. |
 | `ZRB_AVATAR_NUDGE_BACK` | `10` | `zrb_init.py` | Minutes after coming back that "you are back" stays true. |

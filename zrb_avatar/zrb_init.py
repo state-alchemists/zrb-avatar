@@ -41,8 +41,10 @@ Settings (the prefix follows zrb's CFG.ENV_PREFIX, ZRB by default):
                              showing and whether music plays (5)
   ZRB_AVATAR_NUDGE             the nudge, her own clock: "auto" (default) offers a
                              turn when a rule says there is something to ask
-                             about (lunch, bedtime, back at the desk, quiet, the
-                             last turn failed); "off" turns it off
+                             about (back at the desk, quiet, the last turn
+                             failed); "off" turns it off. Clock reminders --
+                             lunch, bedtime -- are zrb-nudge's: another package,
+                             another file (zrb_nudge/zrb_init.py)
   ZRB_AVATAR_NUDGE_SECONDS     seconds between looking at those rules (600)
   ZRB_AVATAR_NUDGE_QUIET       quiet minutes before "quiet" is worth asking about (90)
   ZRB_AVATAR_NUDGE_AWAY        minutes away that make coming back worth noticing (20)
@@ -113,22 +115,6 @@ def _hours(name: str, default: str) -> range:
         return range(int(first), int(last))
 
 
-def _window(name: str, default: str) -> tuple[int, int]:
-    """A span of the day in minutes, from a setting like "12:00-13:30"; 24:00 is its end."""
-    first, _, last = _setting(name, default).replace("24:00", "23:60", 1).partition("-")
-    try:
-        return _minutes(first), _minutes(last)
-    except ValueError:
-        print(f"{CFG.ENV_PREFIX}_AVATAR_{name} is not like {default}; using {default}")
-        first, _, last = default.replace("24:00", "23:60", 1).partition("-")
-        return _minutes(first), _minutes(last)
-
-
-def _minutes(text: str) -> int:
-    hour, _, minute = text.strip().partition(":")
-    return int(hour) * 60 + int(minute)
-
-
 TALK_FIRST = {s.strip() for s in _setting("TALK_FIRST", "").split(",") if s.strip()}
 IDLE_MINUTES = float(_setting("IDLE_MINUTES", "45"))
 COOLDOWN_SECONDS = float(_setting("COOLDOWN", "1200"))
@@ -161,25 +147,19 @@ SIDES = {
 }
 AWAKE_HOURS = _hours("AWAKE_HOURS", "8-22")
 # The nudge keeps its own hours. AWAKE_HOURS is shared by every talk-first path and ends at 22:00
-# by default, so a "go to bed" reminder inside it could never fire: it is late by the time it is due.
+# by default, while "the user has been quiet for two hours" is as true at 23:00 as at noon.
 NUDGE = _setting("NUDGE", "auto").strip().lower()  # auto | off
 NUDGE_HOURS = _hours("NUDGE_HOURS", "7-24")
 NUDGE_SECONDS = float(
     _setting("NUDGE_SECONDS", "600")
 )  # how often the rules are looked at
-NUDGE_LUNCH = _window(
-    "NUDGE_LUNCH", "12:00-13:30"
-)  # minutes of the day, the way a clock reads
-NUDGE_BED = _window("NUDGE_BED", "22:30-24:00")
 NUDGE_QUIET_MINUTES = float(_setting("NUDGE_QUIET", "90"))
 NUDGE_AWAY_MINUTES = float(_setting("NUDGE_AWAY", "20"))
 NUDGE_BACK_MINUTES = float(
     _setting("NUDGE_BACK", "10")
 )  # how long "you are back" stays true
 NUDGE_FILE = HOME / "nudge.json"  # the day's ledger: a restart is not a memory wipe
-NUDGE_DAILY = ("lunch", "bed")  # once a day; the rest repeat after their own wait
 NUDGE_RULES = (
-    *NUDGE_DAILY,
     "failure",
     "return",
     "quiet",
@@ -284,8 +264,8 @@ def _may_speak_first() -> bool:
 
 
 def _may_nudge(now: datetime.datetime) -> bool:
-    """Its own gate, with NUDGE_HOURS instead of AWAKE_HOURS: the bed reminder is due after the
-    hours every other talk-first path keeps."""
+    """Its own gate, with NUDGE_HOURS instead of AWAKE_HOURS: quiet and a return are worth
+    mentioning after the hours every other talk-first path keeps."""
     return (
         not _companion["busy"]
         and not is_speaking()
@@ -312,7 +292,7 @@ def _nudge_day(now: datetime.datetime) -> dict:
     """Today's ledger: what the rules have already used, read once when the day turns over.
 
     Kept on disk so a restart does not start the day again -- zrb restarted at 13:00 should not
-    mention lunch a second time.
+    ask about the quiet a second time.
     """
     today = now.strftime("%Y-%m-%d")
     if _nudge["date"] == today:
@@ -360,14 +340,13 @@ def nudge_candidate(now: datetime.datetime, said: dict) -> tuple[str, str] | Non
     Rules, not a model, because this has to be answerable every NUDGE_SECONDS without spending
     anything. Whether it is worth saying is the turn's own question, and NOTHING_TO_SAY is a real
     answer to it. The ledger is what stops a rule repeating inside its own wait.
+
+    What is left here is what only the face and the turns can know: a failed turn, the user coming
+    back, and quiet. The clock reminders -- lunch, bedtime -- are zrb-nudge's, which keeps its own
+    file and its own trigger; this one must not answer them, or the same lunch is said twice.
     """
     if now.hour not in NUDGE_HOURS:
         return None
-    minute = now.hour * 60 + now.minute
-    if NUDGE_LUNCH[0] <= minute < NUDGE_LUNCH[1] and "lunch" not in said:
-        return "lunch", "It is lunchtime and the user is still working."
-    if NUDGE_BED[0] <= minute < NUDGE_BED[1] and "bed" not in said:
-        return "bed", f"It is {now:%H:%M} and the user is still working."
     if _companion["failed"] > said.get("failed", 0):
         return "failure", "The last turn ended in an error rather than a normal stop."
     away = _back_after()
@@ -397,7 +376,7 @@ async def nudge_watch():
         if candidate is None or not _may_nudge(now):
             continue
         rule, text = candidate
-        said[rule] = True if rule in NUDGE_DAILY else time.time()
+        said[rule] = time.time()
         said["failed"] = _companion["failed"]
         _nudge_save()
         yield _proactive(text, "nudge")
