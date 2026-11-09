@@ -202,15 +202,19 @@ def face_hooks(hooks) -> None:
 
         return hook_unless_nested
 
+    async def paint(state: str) -> None:
+        """Put *state* on the page, and the caption it says while she is not speaking."""
+        await asyncio.to_thread(send, {"type": "state", "value": state})
+        if SUBTITLE:
+            # The state is also the caption: the page puts it up once the sentence on screen
+            # has gone, so the long silences of a tool call still say what is happening.
+            await asyncio.to_thread(
+                send, {"type": "status", "text": STATUS.get(state, "")}
+            )
+
     def to(state: str):
         async def hook(context):
-            await asyncio.to_thread(send, {"type": "state", "value": state})
-            if SUBTITLE:
-                # The state is also the caption: the page puts it up once the sentence on screen
-                # has gone, so the long silences of a tool call still say what is happening.
-                await asyncio.to_thread(
-                    send, {"type": "status", "text": STATUS.get(state, "")}
-                )
+            await paint(state)
             if (
                 context.event == HookEvent.SESSION_START
                 and not _resumes_conversation(context)
@@ -239,8 +243,10 @@ def face_hooks(hooks) -> None:
 
     # The approval wait has its own end. Without this, the "permission" state that
     # PermissionRequest sets stays until the tool finishes — PostToolUse fires at execution, not
-    # approval — so she holds the asking-for-permission posture for the whole call. Older zrb has
-    # no such event, and then nothing here changes.
+    # approval — so she holds the asking-for-permission posture for the whole call. The caption
+    # has to move with it: the page keeps the last status line up until another one arrives, so a
+    # bare state left "(waiting for your answer…)" over a tool that had been running a minute.
+    # Older zrb has no such event, and then nothing here changes.
     resolved = getattr(HookEvent, "PERMISSION_RESOLVED", None)
     if resolved is not None:
 
@@ -249,9 +255,7 @@ def face_hooks(hooks) -> None:
             approved = data.get("approved") if isinstance(data, dict) else None
             if approved is None:  # nobody answered: whatever happens next sets the state
                 return HookResult()
-            await asyncio.to_thread(
-                send, {"type": "state", "value": "tool" if approved else "thinking"}
-            )
+            await paint("tool" if approved else "thinking")
             return HookResult()
 
         hooks.add_hook(unless_nested(answered), events=[resolved])

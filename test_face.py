@@ -149,6 +149,10 @@ class _Answered(_Context):
     event_data = {"approved": True}
 
 
+class _Denied(_Context):
+    event_data = {"approved": False}
+
+
 class _NestedAnswered(_Answered):
     event_data = {"approved": True, "nested_run": True}
 
@@ -181,9 +185,24 @@ assert _painted(_Context(), "PRE_TOOL_USE") == [
 ]  # the same event from the user's turn: the guard is not a mute button
 if getattr(HookEvent, "PERMISSION_RESOLVED", None) is not None:
     assert _painted(_NestedAnswered(), "PERMISSION_RESOLVED") == []
+    # The answer ends the caption as well as the posture. The page keeps the last status line up
+    # until another one arrives, so a bare state left "(waiting for your answer…)" over a tool
+    # that had been running for a minute — the approval's line outliving the approval.
     assert _painted(_Answered(), "PERMISSION_RESOLVED") == [
-        {"type": "state", "value": "tool"}
+        {"type": "state", "value": "tool"},
+        {"type": "status", "text": "(working…)"},
     ]
+    assert _painted(_Denied(), "PERMISSION_RESOLVED") == [
+        {"type": "state", "value": "thinking"},
+        {"type": "status", "text": "(thinking…)"},
+    ]
+    # And the caption rides ZRB_AVATAR_SUBTITLE like every other one.
+    painted_subtitle, face_client.SUBTITLE = face_client.SUBTITLE, False
+    try:
+        muted_answer = _painted(_Answered(), "PERMISSION_RESOLVED")
+    finally:
+        face_client.SUBTITLE = painted_subtitle
+    assert muted_answer == [{"type": "state", "value": "tool"}], muted_answer
 if getattr(HookEvent, "EMOTION", None) is not None:
     assert _painted(_NestedEmotion(), "EMOTION") == []
     assert _painted(_Emotion(), "EMOTION") == [
