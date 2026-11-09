@@ -74,6 +74,11 @@ jobs:
   app:
     needs: release
     strategy:
+      # Three platforms, three separate downloads of the same Electron binary from the
+      # same CDN. A 504 there already cost the 0.3.5 release its Windows and Linux zips:
+      # the first job to fail cancelled the two still running, and the Mac job that had
+      # uploaded a minute earlier was thrown away with a re-run.
+      fail-fast: false
       matrix:
         include:
           - { os: windows-2025-vs2026, pack: win }
@@ -91,7 +96,23 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
-      - run: npm ci && npm run pack:${{ matrix.pack }}
+      # Electron's postinstall fetches its own 100 MB binary from GitHub's release CDN, and
+      # that host answered 504 on two attempts four minutes apart. Three tries with a pause
+      # between them costs a minute; a platform with no zip costs a version number.
+      - name: Install
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              exit 0
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "npm ci failed three times" >&2
+              exit 1
+            fi
+            echo "npm ci failed (attempt $attempt of 3); trying again in 30s" >&2
+            sleep 30
+          done
+      - run: npm run pack:${{ matrix.pack }}
       - name: zip and upload
         run: |
           cd dist
