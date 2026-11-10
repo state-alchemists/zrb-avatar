@@ -2,6 +2,8 @@
 
 zrb-avatar [model] [url]     (re)start the server and open a window showing <model>
 zrb-avatar serve             run the server in the foreground
+zrb-avatar stop              stop the background server (the pid it wrote, or the port)
+zrb-avatar status            whether the server is running, and whether it answers
 zrb-avatar action <name>     play anim/actions/<name> once; <pool>/<name> plays any clip once
 zrb-avatar actions [pool]    list the animations by pool (or one pool), with what each looks like
 zrb-avatar snapshot [file]   save the window as the user sees it (zrb-avatar-snapshot.png)
@@ -28,10 +30,13 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-from zrb_avatar import server
+from zrb_avatar import daemon, server
 
 PORT = int(server.env_get("PORT", "7777"))
 LOG = Path(tempfile.gettempdir()) / "zrb-avatar.log"
+# How `stop` and `status` find it again: the log is in the temp folder, the pid beside the
+# models, so it survives a reboot that clears the temp folder.
+PID = server.HOME / "server.pid"
 
 
 def post(message: dict) -> None:
@@ -69,29 +74,37 @@ def window() -> list[str] | None:
     return [str(electron), str(source)] if electron.exists() else None
 
 
-def start(args: list[str]) -> None:
-    # Restart the server, so it runs the current code with the current settings.
-    # Open windows reconnect and reload by themselves.
+def old_pids() -> list[int]:
+    """The server that is already listening: the one we wrote down, or lsof's answer.
+
+    The pid file is what makes this work on Windows, where there is no lsof to ask; lsof
+    stays for a server started by something that did not write one.
+    """
+    pid = daemon.read_pid(PID)
+    if pid is not None and daemon.running(pid):
+        return [pid]
     try:
-        old = subprocess.run(
+        listed = subprocess.run(
             ["lsof", "-ti", f"tcp:{PORT}", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
         ).stdout
     except FileNotFoundError:
-        old = ""  # ponytail: without lsof an old server keeps the port; the new one logs "address in use"
-    for pid in old.split():
-        os.kill(int(pid), signal.SIGTERM)
+        return []  # ponytail: without lsof only the pid file knows; a stale server keeps the port
+    return [int(entry) for entry in listed.split() if entry.isdigit()]
+
+
+def start(args: list[str]) -> None:
+    # Restart the server, so it runs the current code with the current settings.
+    # Open windows reconnect and reload by themselves.
+    old = old_pids()
+    for pid in old:
+        os.kill(pid, signal.SIGTERM)
     if old:
         time.sleep(0.5)
-    with open(LOG, "w") as log:
-        subprocess.Popen(
-            [sys.executable, str(server.HERE / "server.py")],
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    PID.unlink(missing_ok=True)
+    pid = daemon.detach([sys.executable, str(server.HERE / "server.py")], LOG, mode="w")
+    daemon.write_pid(PID, pid)
     program = window()
     if (
         program
@@ -114,6 +127,30 @@ def start(args: list[str]) -> None:
         time.sleep(0.5)  # let the server bind
         webbrowser.open(f"http://localhost:{PORT}/{query}")
     print(f"server log: {LOG}")
+
+
+def stop() -> None:
+    """Stop the server: by the pid it wrote, or by whoever holds the port."""
+    pids = old_pids()
+    if not pids:
+        print(f"nothing to stop: no server holds port {PORT}")
+        return
+    for pid in pids:
+        os.kill(pid, signal.SIGTERM)
+    PID.unlink(missing_ok=True)
+    print("stopped " + ", ".join(f"pid {pid}" for pid in pids))
+
+
+def status() -> None:
+    pid = daemon.read_pid(PID)
+    if pid is not None and daemon.running(pid):
+        said = f"running as pid {pid}, from {PID}"
+    elif pid is not None:
+        said = f"not running: pid {pid} in {PID} is gone"
+    else:
+        said = f"not running: no pid file ({PID}), so it was started before this file existed"
+    up = "answering" if daemon.answering(f"http://127.0.0.1:{PORT}/model") else "not answering"
+    print(f"{said}; {up} on port {PORT}")
 
 
 def actions(pool: str = "") -> None:
@@ -198,6 +235,10 @@ def main() -> None:
         print(__doc__)
     elif command == "serve":
         server.main()
+    elif command == "stop":
+        stop()
+    elif command == "status":
+        status()
     elif command == "action" and len(args) == 2:
         post({"type": "action", "value": args[1]})
     elif command == "music" and args[1:] in (["on"], ["off"], ["auto"]):

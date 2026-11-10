@@ -53,7 +53,7 @@ jobs:
 
       - name: Lint
         # Pyflakes-class checks only, as zrb does.
-        run: flake8 --select=F zrb_avatar test_face.py zrb_init.py test_ci.py
+        run: flake8 --select=F zrb_avatar test_face.py zrb_init.py test_ci.py test_daemon.py
 
       - name: Check the CI configuration
         run: python test_ci.py
@@ -61,3 +61,7 @@ jobs:
       - name: Test
         # Also regenerates every clip in memory and fails if a shipped .vrma is stale.
         run: python test_face.py
+
+      - name: Test the background start
+        # Spawns real processes: the claim is that the child outlives the caller.
+        run: python test_daemon.py
