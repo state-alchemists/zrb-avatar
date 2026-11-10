@@ -1056,18 +1056,33 @@ assert (
     and shot.getheader("Content-Type") == "image/png"
     and shot.read() == PNG
 )
-assert json.loads(shot.getheader("X-Face")) == {"state": "idle", "playing": "idle/wait"}
+assert json.loads(shot.getheader("X-Face")) == {
+    "state": "idle",
+    "playing": "idle/wait",
+    "chosen": None,
+}  # chosen: which avatar is meant to be showing; none is remembered in this home
 client.request(
     "POST", "/snapshot?id=made-up", '{"image": "data:image/png;base64,AAAA"}'
 )
 assert client.getresponse().status == 404  # nobody asked for that one
 assert server.take_snapshot(timeout=0.3) is None  # pages open, but none answers
+# A reloading window is not a closed window: a page that connects after the ask still answers,
+# which is what makes a look work again a moment after the window reopens (and why the old
+# "no page is open" answer was a lie during a reload).
+threading.Thread(target=lambda: (time.sleep(0.6), fake_window()), daemon=True).start()
+early = time.monotonic()
+waited = server.take_snapshot(timeout=3)
+assert waited is not None and waited[0] == PNG
+assert time.monotonic() - early > 0.4  # it waited for the page rather than give up
 url = face_client.AVATAR_URL
 face_client.AVATAR_URL = f"http://127.0.0.1:{port}/event"
 try:
     threading.Thread(target=fake_window, daemon=True).start()
     time.sleep(0.3)
-    assert face_client.snapshot() == (PNG, {"state": "idle", "playing": "idle/wait"})
+    assert face_client.snapshot() == (
+        PNG,
+        {"state": "idle", "playing": "idle/wait", "chosen": None},
+    )
 finally:
     face_client.AVATAR_URL = url
 face_client.AVATAR_URL, saved = "http://127.0.0.1:9/event", face_client.AVATAR_URL

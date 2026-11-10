@@ -831,6 +831,17 @@ def AvatarListModels() -> str:
     return "Avatars (switch with AvatarModel):\n" + "\n".join(lines)
 
 
+MODEL_WAIT_SECONDS = 5.0  # how long AvatarModel waits for the windows to catch up
+
+
+def _showing_avatar(name: str) -> bool:
+    """Whether the server records *name* as chosen and a page reports it as showing."""
+    state = ask("model")
+    if not isinstance(state, dict) or state.get("chosen") != name:
+        return False
+    return name in (state.get("showing") or [])
+
+
 def AvatarModel(name: str) -> str:
     """Switch your avatar to another VRM model, by name as AvatarListModels lists it; every open window
     changes at once and keeps it until the face server restarts. Use it when the user asks you to
@@ -840,8 +851,25 @@ def AvatarModel(name: str) -> str:
         return "The face server is not running, so there is no avatar to switch."
     if name not in names:
         return f"No such avatar. Avatars: {', '.join(names) or 'none'}."
+    if _showing_avatar(name):
+        return f"{name} is already the one showing."
     send({"type": "model", "value": name})
-    return f"Switching to {name}; she changes in a second or two."
+    # The page keeps the old model on screen until the new file has downloaded and parsed,
+    # and it answers a look in that window with the old one. So wait for the pages to report
+    # the new model instead of promising "a second or two" and leaving the rest to luck.
+    deadline = time.monotonic() + MODEL_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if _showing_avatar(name):
+            return f"Now showing {name}."
+        time.sleep(0.25)
+    state = ask("model")
+    state = state if isinstance(state, dict) else {}
+    still = ", ".join(state.get("showing") or []) or "nothing"
+    return (
+        f"Asked for {name}: the server recorded it (chosen: {state.get('chosen')}), but "
+        f"the open window(s) still report {still}. Either a window is still loading it, or "
+        f"none received the event. AvatarLook shows what is really on the screen."
+    )
 
 
 def _image_tool_return():
@@ -866,8 +894,24 @@ async def AvatarLook():
     the user asks how you look. It shows only your own window, not the user's screen."""
     shot = await asyncio.to_thread(snapshot)
     if shot is None:
-        return "Your window is not open (or the face server is not running), so there is nothing to see."
+        return (
+            "No window answered (or the face server is not running), so there is nothing to "
+            "see. A page that is reloading, or still loading her model, answers nothing at "
+            "all; AvatarStatus says what the server does report."
+        )
     image, about = shot
+    chosen = about.pop("chosen", None)
+    stale = _stale_avatar(about, chosen)
+    if stale:
+        # The server asks the pages showing the chosen avatar first, so a mismatch here is
+        # the fallback after its patience ran out -- usually one window still finishing a
+        # swap. One more try is cheap, and a picture of the wrong clothes is not.
+        await asyncio.sleep(1.5)
+        again = await asyncio.to_thread(snapshot)
+        if again is not None:
+            image, about = again
+            chosen = about.pop("chosen", None)
+            stale = _stale_avatar(about, chosen)
     doing = ", ".join(
         f"{k}: {v}" for k, v in about.items() if v not in (None, False, "")
     )
@@ -885,7 +929,19 @@ async def AvatarLook():
     # text-only one, else a hint naming LLM_MULTIMODAL_MODEL.
     return await create_image_tool_return(
         BinaryContent(data=image, media_type="image/png"),
-        f"Your window as the user sees it. Now: {doing}",
+        f"Your window as the user sees it. Now: {doing}"
+        + (f". {stale}" if stale else ""),
+    )
+
+
+def _stale_avatar(about: dict, chosen) -> str:
+    """A line saying the picture is of the wrong avatar, or "" when it is of the right one."""
+    shown = about.get("model")
+    if not chosen or not shown or shown == chosen:
+        return ""
+    return (
+        f"This window still shows {shown}, while {chosen} is the one chosen: she is either "
+        f"mid-swap or a second window is showing the old avatar."
     )
 
 

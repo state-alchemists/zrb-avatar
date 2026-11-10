@@ -106,6 +106,11 @@ POOL = re.compile(r"[\w-]+")
 MAX_EVENT_BYTES = 65536
 MAX_SNAPSHOT_BYTES = 16_000_000  # a PNG as a data: URL, plus what she is doing
 SNAPSHOT_SECONDS = 6.0  # how long GET /snapshot waits for a page to answer
+# How long a snapshot keeps insisting on a page that shows the chosen model before it
+# accepts one that does not. A reload drops the page for a second or two, and a model
+# switch leaves the old model on screen until the new file has loaded: in both cases the
+# window is there, and the picture that arrives is of the wrong thing.
+SNAPSHOT_INSIST_SECONDS = 2.0
 AUTONOMY = (
     "dance",
     "blush",
@@ -888,18 +893,45 @@ def short_name(clip: dict, names: dict[str, dict]) -> str:
 
 
 def take_snapshot(timeout: float = SNAPSHOT_SECONDS) -> tuple[bytes, dict] | None:
-    """Ask the open pages for a picture of the window; the first to answer wins. None when no
-    page is open or none answers in time."""
-    with _lock:
-        if not _clients:
-            return None
+    """Ask the open pages for a picture of the window; the first to answer wins.
+
+    A page is not the same as the window being there. A reload drops the page for a
+    second or two, and a model switch leaves the old model on screen until the new one
+    has loaded, so the pages are asked again for as long as the timeout lasts -- one
+    that connects late still answers -- and while any page shows the chosen model only
+    those are asked, so a window still changing clothes cannot answer for the one
+    already dressed. None only when no page answers in time.
+    """
     key = secrets.token_hex(8)
     waiting = _snapshots[key] = {"done": threading.Event(), "image": b"", "about": {}}
+    message = json.dumps({"type": "snapshot", "id": key})
+    chosen = chosen_model()
+    now = time.monotonic()
+    deadline = now + timeout
+    insist = now + min(SNAPSHOT_INSIST_SECONDS, timeout)
+    asked: set[queue.Queue] = set()  # each page is asked once: one answer ends this
     try:
-        broadcast(json.dumps({"type": "snapshot", "id": key}))
-        if not waiting["done"].wait(timeout):
-            return None
-        return waiting["image"], waiting["about"]
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                return None
+            with _lock:
+                open_pages = list(_clients)
+                dressed = [
+                    page for page in open_pages if chosen and _showing.get(page) == chosen
+                ]
+                # Nobody dressed yet and time to spare: wait for the page that is
+                # finishing its swap rather than take the old clothes for the answer.
+                if not dressed and chosen and now < insist:
+                    targets = []
+                else:
+                    targets = dressed or open_pages
+                for page in targets:
+                    if page not in asked:
+                        asked.add(page)
+                        page.put(message)
+            if waiting["done"].wait(min(0.5, deadline - now)):
+                return waiting["image"], waiting["about"]
     finally:
         _snapshots.pop(key, None)
 
@@ -1173,9 +1205,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error(400)
         if not waiting["done"].is_set():
             about = answer.get("about")
-            waiting["image"], waiting["about"] = image, (
-                about if isinstance(about, dict) else {}
-            )
+            waiting["image"], waiting["about"] = image, {
+                **(about if isinstance(about, dict) else {}),
+                # Which avatar is *meant* to be showing, so zrb can tell a picture of the
+                # one that is still loading from the one it asked for.
+                "chosen": chosen_model(),
+            }
             waiting["done"].set()
         self.send_response(204)
         self.end_headers()
