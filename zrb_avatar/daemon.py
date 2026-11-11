@@ -94,16 +94,84 @@ def _running_on_windows(pid: int) -> bool:
 
 
 def read_pid(path: Path) -> int | None:
-    """The pid in *path*, or None when it is missing or is not a number."""
+    """The pid in the first line of *path*, or None when missing or not a number."""
     try:
-        return int(path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
+        return int(path.read_text(encoding="utf-8").splitlines()[0].strip())
+    except (OSError, ValueError, IndexError):
         return None
 
 
+def read_identity(path: Path) -> str | None:
+    """The start time written beside the pid, so a reused pid is not mistaken for it."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    return lines[1].strip() if len(lines) > 1 and lines[1].strip() else None
+
+
+def started_at(pid: int) -> str | None:
+    """When the process began, as the system reports it, or None where it cannot be read.
+
+    A pid is reused: the number in a file left behind by a crash can be someone else's by
+    the time it is read, and signalling that would be worse than doing nothing. Linux gives
+    this in `/proc`, macOS through `ps`, Windows through the process's creation time.
+    """
+    if os.name == "nt":
+        return _windows_started_at(pid)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    else:
+        fields = stat.rsplit(")", 1)[-1].split()
+        if len(fields) > 19:
+            return fields[19]
+    try:
+        answered = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except OSError:
+        return None
+    return answered or None
+
+
+def _windows_started_at(pid: int) -> str | None:
+    """The process's creation time, so a reused pid can be told from the original."""
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+    class FileTime(ctypes.Structure):
+        _fields_ = [("low", ctypes.c_ulong), ("high", ctypes.c_ulong)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        created, exited, kernel, user = FileTime(), FileTime(), FileTime(), FileTime()
+        asked = kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        )
+        if not asked:
+            return None
+        return str((created.high << 32) | created.low)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def write_pid(path: Path, pid: int) -> None:
+    """Write the pid, and what the system says its process began, for `stop` to check."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(pid), encoding="utf-8")
+    identity = started_at(pid) or ""
+    path.write_text(f"{pid}\n{identity}\n", encoding="utf-8")
 
 
 def answering(url: str, timeout: float = 1.0) -> bool:

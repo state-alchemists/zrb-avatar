@@ -110,10 +110,29 @@ def check_lsof_is_the_fallback() -> None:
 
 def check_stop_says_when_nothing_runs() -> None:
     with mock.patch.object(cli, "old_pids", lambda: []):
-        printed = io.StringIO()
-        with contextlib.redirect_stdout(printed):
-            cli.stop()
+        with mock.patch.object(cli.daemon, "read_pid", lambda path: None):
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                cli.stop()
     assert "nothing to stop" in printed.getvalue()
+
+
+def check_a_reused_pid_is_refused_rather_than_signalled() -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "server.pid"
+        path.write_text("4242\nbegan-long-ago\n", encoding="utf-8")
+        signalled = []
+        with mock.patch.object(cli, "PID", path):
+            with mock.patch.object(cli.daemon, "running", lambda pid: True):
+                with mock.patch.object(cli.os, "kill", lambda *a: signalled.append(a)):
+                    printed = io.StringIO()
+                    with contextlib.redirect_stdout(printed):
+                        cli.stop()
+        said = printed.getvalue()
+    if cli.daemon.started_at(4242) is None:
+        return  # this system reports no start time; there is nothing to compare
+    assert "refused" in said, said
+    assert signalled == [], "it signalled a process the file did not belong to"
 
 
 def check_status_names_the_pid_and_whether_it_answers() -> None:

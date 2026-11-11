@@ -130,15 +130,35 @@ def start(args: list[str]) -> None:
 
 
 def stop() -> None:
-    """Stop the server: by the pid it wrote, or by whoever holds the port."""
-    pids = old_pids()
-    if not pids:
+    """Stop the server: by the pid it wrote, or by whoever holds the port.
+
+    The pid file records when its process began, and that is checked before anything is
+    signalled: a file left behind by a crash can name a process that has nothing to do with
+    the face by the time this runs.
+    """
+    pid = daemon.read_pid(PID)
+    expected = daemon.read_identity(PID)
+    if pid is not None and daemon.running(pid):
+        current = daemon.started_at(pid)
+        if expected and current and expected != current:
+            PID.unlink(missing_ok=True)
+            print(
+                f"refused: pid {pid} is not the server that wrote {PID} -- the pid was "
+                "reused, so nothing was signalled"
+            )
+            return
+        os.kill(pid, signal.SIGTERM)
+        PID.unlink(missing_ok=True)
+        print(f"stopped pid {pid}")
+        return
+    others = [one for one in old_pids() if one != pid]
+    if not others:
+        PID.unlink(missing_ok=True)
         print(f"nothing to stop: no server holds port {PORT}")
         return
-    for pid in pids:
-        os.kill(pid, signal.SIGTERM)
-    PID.unlink(missing_ok=True)
-    print("stopped " + ", ".join(f"pid {pid}" for pid in pids))
+    for one in others:
+        os.kill(one, signal.SIGTERM)
+    print("stopped " + ", ".join(f"pid {one}" for one in others))
 
 
 def status() -> None:
