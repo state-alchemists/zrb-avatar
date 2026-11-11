@@ -2,6 +2,7 @@
 
 zrb-avatar [model] [url]     (re)start the server and open a window showing <model>
 zrb-avatar serve             run the server in the foreground
+zrb-avatar --version         the version this install reports
 zrb-avatar stop              stop the background server (the pid it wrote, or the port)
 zrb-avatar status            whether the server is running, and whether it answers
 zrb-avatar action <name>     play anim/actions/<name> once; <pool>/<name> plays any clip once
@@ -28,6 +29,7 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
 from zrb_avatar import daemon, server
@@ -37,6 +39,18 @@ LOG = Path(tempfile.gettempdir()) / "zrb-avatar.log"
 # How `stop` and `status` find it again: the log is in the temp folder, the pid beside the
 # models, so it survives a reboot that clears the temp folder.
 PID = server.HOME / "server.pid"
+
+
+def installed_version() -> str:
+    """The version in the metadata, which is the one running, so `--version` cannot drift.
+
+    An editable checkout keeps the version it was installed as, and one that was never
+    installed has none -- the face still works, so it says 0.0.0 rather than refusing.
+    """
+    try:
+        return package_version("zrb-avatar")
+    except PackageNotFoundError:
+        return "0.0.0"
 
 
 def post(message: dict) -> None:
@@ -253,6 +267,8 @@ def main() -> None:
     command = args[0] if args else ""
     if command in ("-h", "--help", "help"):
         print(__doc__)
+    elif command in ("-V", "--version"):
+        print(installed_version())
     elif command == "serve":
         server.main()
     elif command == "stop":
@@ -281,6 +297,13 @@ def main() -> None:
         print(server.HERE / "zrb_init.py")
     elif command in ("action", "music", "model", "models", "anim"):
         sys.exit(__doc__)
+    elif command.startswith("-"):
+        # An option this program has not got. Falling through would hand it to `start` as
+        # though it were a model name, and `start` restarts the face -- which is how
+        # `zrb-avatar --version` came back with a server and no version at all.
+        sys.stderr.write(f"zrb-avatar: unknown option {command!r}\n\n")
+        sys.stderr.write(__doc__ or "")
+        sys.exit(2)
     else:
         start(args)
 
