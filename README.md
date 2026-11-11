@@ -494,6 +494,10 @@ command run without zrb, so their names are fixed.
 | `ZRB_AVATAR_MUSIC` | `auto` | server | `auto` dances while media plays — Windows' media controls (also from WSL), `playerctl` on Linux, or `media-control` (else Spotify/Music by AppleScript) on macOS; `off` only dances on `zrb-avatar music on`. |
 | `ZRB_AVATAR_APP` | per platform | `zrb-avatar` | The program to open as the window, instead of the Windows build, the macOS app or Electron from source. |
 
+`7777` is quad digits, easy to say and to type, and nothing is registered to it. It only has
+to stay clear of zrb's web port, `21213`, and the board's `8765`. It is a default rather than
+a decision: `ZRB_AVATAR_PORT` moves it, with `ZRB_AVATAR_URL` following.
+
 ### zrb settings it depends on
 
 | Setting | Why it matters |

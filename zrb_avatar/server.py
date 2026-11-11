@@ -1271,6 +1271,9 @@ def serve(host: str, port: int) -> ThreadingHTTPServer:
 
 def main() -> None:
     host = env_get("HOST", "127.0.0.1")
+    # Quad digits, easy to say and to type; nothing is registered to it. It only has to
+    # stay clear of zrb's web port (21213) and the board's 8765 -- and it is a default,
+    # not a decision: ZRB_AVATAR_PORT moves it, with ZRB_AVATAR_URL to match.
     port = int(env_get("PORT", "7777"))
     print(f"face on http://localhost:{port}")
     if env_get("MUSIC", "auto") == "auto":
