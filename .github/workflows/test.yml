@@ -53,7 +53,7 @@ jobs:
 
       - name: Lint
         # Pyflakes-class checks only, as zrb does.
-        run: flake8 --select=F zrb_avatar test_face.py zrb_init.py test_ci.py test_daemon.py
+        run: flake8 --select=F zrb_avatar test_face.py zrb_init.py test_ci.py test_daemon.py test_cli.py
 
       - name: Check the CI configuration
         run: python test_ci.py
@@ -65,3 +65,7 @@ jobs:
       - name: Test the background start
         # Spawns real processes: the claim is that the child outlives the caller.
         run: python test_daemon.py
+
+      - name: Test the argument guard
+        # `start` is mocked here, because the claim is that an unknown option starts nothing.
+        run: python test_cli.py
