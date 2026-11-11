@@ -46,11 +46,14 @@ def running(pid: int) -> bool:
     """Whether *pid* names a live process.
 
     Signal 0 asks the system whether it could deliver, which is not the same question: an
-    exited child whose parent has not reaped it answers yes. Linux's `/proc` settles that;
-    where there is no `/proc`, the signal-0 answer stands.
+    exited child whose parent has not reaped it answers yes, so Linux's `/proc` settles
+    that. Windows must not be asked this way at all -- `os.kill` there terminates the
+    process whatever the number, so "are you alive" would become "die".
     """
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _running_on_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -65,6 +68,29 @@ def running(pid: int) -> bool:
         return True
     fields = stat.rsplit(")", 1)[-1].split()
     return not fields or fields[0] != "Z"
+
+
+def _running_on_windows(pid: int) -> bool:
+    """Ask Windows whether a process is still running, without touching it.
+
+    `OpenProcess` fails for a pid that is gone, and `GetExitCodeProcess` separates a live
+    process from a dead one whose object another handle is still holding open.
+    """
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def read_pid(path: Path) -> int | None:
