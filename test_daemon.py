@@ -21,10 +21,21 @@ from zrb_avatar import __main__ as cli
 from zrb_avatar import daemon
 
 
-def gone(pid: int, seconds: float = 2.0) -> bool:
-    """Whether *pid* goes away within *seconds*."""
+def gone(pid: int, seconds: float = 5.0) -> bool:
+    """Whether *pid* goes away within *seconds*, collecting it first where that is our job.
+
+    A child that has exited but not been collected still answers signal 0. Linux's
+    `running()` reads `/proc` and sees the `Z`; macOS has no `/proc`, so this process --
+    which is the parent, and therefore the one that should reap -- collects it here.
+    """
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
+        if os.name != "nt":
+            try:
+                if os.waitpid(pid, os.WNOHANG)[0]:
+                    return True
+            except ChildProcessError:
+                return True
         if not daemon.running(pid):
             return True
         time.sleep(0.05)
