@@ -1467,10 +1467,64 @@ face_zrb._face.update(
 line = face_zrb._ambient_line()
 assert "presence: someone at the desk by photo size" in line, line
 assert (
-    "camera: a close-up of her chest from the front, 0.5 of her height across the window"
-    in line
+    "camera: a close look at her chest from the front, which she is shy about" in line
 ), line
-assert "which she is shy about" in line, line
+# What the frame holds is said in words, not in the page's arithmetic: `shows` is her height
+# across the window's narrower side, and a figure nobody would say out loud describes nothing.
+assert "0.5" not in line, line
+
+
+def _camera_says(view: dict, when=None) -> str:
+    """The camera segment of one view's ambient line, the rest of the face held still."""
+    saved = dict(face_zrb._face)
+    try:
+        face_zrb._face.update({"view": dict(view), "view_at": when})
+        return [
+            part
+            for part in face_zrb._ambient_line().split(" · ")
+            if part.startswith("camera: ")
+        ][0]
+    finally:
+        face_zrb._face.clear()
+        face_zrb._face.update(saved)
+
+
+# All of her, with air at both ends: 1.0 is the page's own threshold, so both sides of it.
+assert _camera_says({"part": "chest", "side": "front", "shows": 1.4}) == (
+    "camera: all of her, head to heels, with air above and below, from the front"
+)
+assert _camera_says({"part": "chest", "side": "front", "shows": 1.0}).startswith(
+    "camera: all of her"
+)
+assert _camera_says({"part": "chest", "side": "front", "shows": 0.99}).startswith(
+    "camera: most of her"
+)
+# Most of her, and the part the window is centred on, which is what the old line named.
+assert _camera_says({"part": "face", "side": "side", "shows": 0.75}) == (
+    "camera: most of her, with her face in the middle, from the side"
+)
+# Under the page's `close` the frame is a close look at that one part, and said from where.
+assert _camera_says({"part": "hips", "side": "behind", "close": True, "shows": 0.4}) == (
+    "camera: a close look at her hips from behind"
+)
+# A shy close-up says so, after the side and before how long ago.
+assert _camera_says(
+    {"part": "chest", "side": "front", "close": True, "shy": True, "shows": 0.5},
+    time.monotonic() - 120,
+) == (
+    "camera: a close look at her chest from the front, which she is shy about, 2 min ago"
+)
+# No figure from the page reaches the words at any distance, and a view the page sent no size
+# for claims no more than the part it is centred on.
+for shows in (2.0, 1.0, 0.99, 0.75, 0.6, 0.5, 0.25):
+    said = _camera_says(
+        {"part": "chest", "side": "front", "close": shows < 0.6, "shows": shows}
+    )
+    assert str(shows) not in said, said
+    assert not any(character.isdigit() for character in said), said
+assert _camera_says({"part": "belly", "side": "above"}) == (
+    "camera: her belly in the middle of the window, from above"
+)
 # A guess says so. "size" is a photo size, never a face; "idle" is the clock, and neither claims
 # to have seen one — "face" is still reserved for something that actually does.
 assert face_zrb.PRESENCE_SOURCES == {
