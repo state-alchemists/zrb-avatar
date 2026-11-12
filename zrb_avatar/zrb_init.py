@@ -138,6 +138,10 @@ SIDES = {
     "below": "below",
     "above": "above",
 }
+# What the page's `shows` means (js/view.js): her height across the window's narrower side, so 1
+# or more fits all of her in frame. Read to decide what to say, never said: nobody describes a
+# picture as "0.75 of her height across the window".
+ALL_OF_HER = 1.0
 AWAKE_HOURS = _hours("AWAKE_HOURS", "8-22")
 NOTHING_TO_SAY = "…"
 _companion = {
@@ -252,6 +256,39 @@ def _ago(when: float | None) -> str:
     return "just now" if minutes < 1 else f"{minutes} min ago"
 
 
+def _frame_in_words(view: dict) -> str:
+    """What the window holds and from where, said the way a person would say it.
+
+    `shows` is her height across the window's narrower side (js/view.js), so it says how much of
+    her is in frame; `part` is what sits at the middle of it, and `side` where the camera stands.
+    Under the page's own `close` the frame is a close-up, and what it holds is that one part.
+    """
+    part = view.get("part")
+    side = SIDES.get(view.get("side") or "", "the front")
+    if view.get("close"):
+        return f"a close look at her {part} from {side}"
+    shows = view.get("shows")
+    if isinstance(shows, bool) or not isinstance(shows, (int, float)):
+        return f"her {part} in the middle of the window, from {side}"
+    if shows >= ALL_OF_HER:
+        return f"all of her, head to heels, with air above and below, from {side}"
+    return f"most of her, with her {part} in the middle, from {side}"
+
+
+def _camera_line(view: dict, when: float | None) -> str:
+    """The camera part of the ambient line: what the frame holds, from which side, how long ago,
+    and — only when it is true — that the look is one she is shy about."""
+    if not view.get("part"):
+        return "camera: nothing reported yet"
+    said = [_frame_in_words(view)]
+    if view.get("shy"):
+        said.append("which she is shy about")
+    ago = _ago(when)
+    if ago:
+        said.append(ago)
+    return "camera: " + ", ".join(said)
+
+
 def _ambient_line() -> str:
     """One line on what the face last reported, prepended to every turn.
 
@@ -273,15 +310,7 @@ def _ambient_line() -> str:
             + (f", since {since}" if since else "")
         )
     view = _face["view"]
-    seen = "camera: nothing reported yet"
-    if view.get("part"):
-        how = "a close-up of" if view.get("close") else "a view of"
-        where = SIDES.get(view.get("side") or "", "the front")
-        shy = ", which she is shy about" if view.get("shy") else ""
-        seen = (
-            f"camera: {how} her {view['part']} from {where}, "
-            f"{view.get('shows')} of her height across the window, {_ago(_face['view_at'])}{shy}"
-        )
+    seen = _camera_line(view, _face["view_at"])
     return (
         f"face — {who} · {seen} · avatar: {_face['model'] or 'unknown'} · "
         f"music: {'playing' if _face['music'] else 'off'}"
