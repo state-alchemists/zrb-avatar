@@ -5,7 +5,11 @@ const path = require('path');
 
 const base = process.argv.find(a => a.startsWith('http')) || 'http://localhost:7777';
 const model = process.argv.slice(1).find(a => /^[a-z0-9][\w-]*(\.vrm)?$/i.test(a))?.replace(/\.vrm$/i, ''); // rem or rem.vrm
-const url = `${base}/?app${model ? `&model=${model}` : ''}`;
+// The token a guarded server wants, handed over in the environment by `zrb-avatar` rather than on
+// the command line, which `ps` would show. This first load trades it for a cookie, and the page's
+// own fetches and its event stream carry that from then on.
+const token = process.env.ZRB_FACE_TOKEN || '';
+const url = `${base}/?app${model ? `&model=${model}` : ''}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
 // The server may be any URL named on the command line, so its page is untrusted: it may size the
 // window and nothing else. This is the one origin allowed to do that; the preload hands the bridge
 // to that origin alone, and the resize handler checks the asker's own origin as well.

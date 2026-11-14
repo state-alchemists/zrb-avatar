@@ -25,6 +25,11 @@ relayed like a pose and not remembered, because a blink that arrived while a pag
 already happened.
 Stdlib only; run with `python3 server.py` or `zrb-avatar serve`, then open http://localhost:7777.
 
+With ZRB_AVATAR_TOKEN set, every request has to carry that token: `Authorization: Bearer <token>`,
+the cookie a first visit with `?token=` sets, or `?token=` itself. Unset -- the default -- nothing
+is asked for, because the server only answers this machine. A bind that is not loopback is refused
+without a token; auth.py holds the policy and the reasoning behind it.
+
 Models and animations are looked up in folders, the first match winning:
   models:      $<PREFIX>_AVATAR_MODELS..., <home>/models
   animations:  $<PREFIX>_AVATAR_ANIMS...,  <home>/anim, the ones shipped in this package
@@ -66,6 +71,11 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import metadata
 from pathlib import Path
+
+try:  # imported as `zrb_avatar.server`, which is how the tests and every tool see her
+    from zrb_avatar import auth
+except ImportError:  # run as a script beside the package, which is how `zrb-avatar` starts her
+    import auth
 
 # zrb spells its own settings <ENV_PREFIX>_*, and reads that prefix from the bare
 # `_ZRB_ENV_PREFIX` -- the bootstrap key in zrb's config, deliberately unprefixed so it
@@ -140,6 +150,11 @@ AUTONOMY_DEFAULTS = {
     "greeting": True,
     "cover": True,
 }
+# Who may reach her. Empty -- the default -- is a server only this machine talks to, which is what
+# she is until someone puts a phone or a proxy in front of her. Set, it guards every request;
+# auth.py holds the shapes it is accepted in, and why a bind that is not loopback is refused
+# without one.
+TOKEN = env_get("TOKEN")
 
 
 def _on(variable: str) -> bool:
@@ -1023,7 +1038,31 @@ def _replay(client: queue.Queue, chosen: str | None) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _allowed(self) -> bool:
+        """Whether this request carries the token, when the server asks for one."""
+        return auth.presented(
+            self.headers, urllib.parse.urlparse(self.path).query, TOKEN
+        )
+
+    def _hand_over_the_cookie(self):
+        """Trade a `?token=` for the cookie, and go where the link meant to go.
+
+        The one thing a phone needs to do by hand: the address is typed once, with the token in
+        it, and every request after that carries the cookie by itself -- the page fetches and its
+        EventSource included, without a line of JavaScript asking.
+        """
+        target = auth.url_without_token(self.path)
+        self.send_response(302)
+        self.send_header("Location", target)
+        self.send_header("Set-Cookie", auth.cookie_header(TOKEN))
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
+        if not self._allowed():
+            return self.send_error(401, "this server wants its token")
+        if auth.wants_a_cookie(self.path, TOKEN):
+            return self._hand_over_the_cookie()
         path = urllib.parse.unquote(self.path.split("?")[0])
         if path == "/events":
             return self._stream()
@@ -1110,6 +1149,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        if not self._allowed():
+            return self.send_error(401, "this server wants its token")
         if self.path.startswith("/snapshot?"):
             return self._snapshot()
         if self.path != "/event":
@@ -1271,6 +1312,9 @@ def serve(host: str, port: int) -> ThreadingHTTPServer:
 
 def main() -> None:
     host = env_get("HOST", "127.0.0.1")
+    # Before anything is served: a bind the tailnet can reach is refused unless a token guards
+    # it. There is no flag that talks this out of it -- see auth.refuse_insecure_bind.
+    auth.refuse_insecure_bind(host, TOKEN, env_name("TOKEN"))
     # Quad digits, easy to say and to type; nothing is registered to it. It only has to
     # stay clear of zrb's web port (21213) and the board's 8765 -- and it is a default,
     # not a decision: ZRB_AVATAR_PORT moves it, with ZRB_AVATAR_URL to match.

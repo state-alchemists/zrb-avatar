@@ -35,10 +35,18 @@ from pathlib import Path
 from zrb_avatar import daemon, server
 
 PORT = int(server.env_get("PORT", "7777"))
+# The token server.py asks for once it is put where something other than this machine can reach
+# it. The same <PREFIX>_AVATAR_TOKEN zrb's client reads, so one setting guards every caller.
+TOKEN = server.env_get("TOKEN")
 LOG = Path(tempfile.gettempdir()) / "zrb-avatar.log"
 # How `stop` and `status` find it again: the log is in the temp folder, the pid beside the
 # models, so it survives a reboot that clears the temp folder.
 PID = server.HOME / "server.pid"
+
+
+def headers(**extra: str) -> dict[str, str]:
+    """What this program's requests carry: the token when the server asks for one, plus *extra*."""
+    return {**extra, **({"Authorization": f"Bearer {TOKEN}"} if TOKEN else {})}
 
 
 def installed_version() -> str:
@@ -57,7 +65,7 @@ def post(message: dict) -> None:
     request = urllib.request.Request(
         f"http://127.0.0.1:{PORT}/event",
         json.dumps(message).encode(),
-        {"Content-Type": "application/json"},
+        headers(**{"Content-Type": "application/json"}),
     )
     try:
         urllib.request.urlopen(request, timeout=2).close()
@@ -120,11 +128,15 @@ def start(args: list[str]) -> None:
     pid = daemon.detach([sys.executable, str(server.HERE / "server.py")], LOG, mode="w")
     daemon.write_pid(PID, pid)
     program = window()
+    # A guarded server refuses the window like anyone else, so the token goes with it — through the
+    # environment rather than the command line, which `ps` would show to every process on the host.
+    guarded = {**os.environ, "ZRB_FACE_TOKEN": TOKEN} if TOKEN else None
     if (
         program
     ):  # detached, or zsh/bash stop it for reading the terminal ("suspended (tty input)")
         subprocess.Popen(
             [*program, *args],
+            env=guarded,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -139,7 +151,10 @@ def start(args: list[str]) -> None:
             "no desktop app found; opening a browser (see the README to install the app)"
         )
         time.sleep(0.5)  # let the server bind
-        webbrowser.open(f"http://localhost:{PORT}/{query}")
+        # The token in the address is what a browser cannot get any other way; the server trades it
+        # for a cookie and redirects, so only this first visit carries it.
+        token = f"{'&' if query else '?'}token={urllib.parse.quote(TOKEN)}" if TOKEN else ""
+        webbrowser.open(f"http://localhost:{PORT}/{query}{token}")
     print(f"server log: {LOG}")
 
 
@@ -183,8 +198,8 @@ def status() -> None:
         said = f"not running: pid {pid} in {PID} is gone"
     else:
         said = f"not running: no pid file ({PID}), so it was started before this file existed"
-    up = "answering" if daemon.answering(f"http://127.0.0.1:{PORT}/model") else "not answering"
-    print(f"{said}; {up} on port {PORT}")
+    reachable = daemon.answering(f"http://127.0.0.1:{PORT}/model", headers=headers())
+    print(f"{said}; {'answering' if reachable else 'not answering'} on port {PORT}")
 
 
 def actions(pool: str = "") -> None:
@@ -200,7 +215,8 @@ def ask(path: str):
     """The running server's JSON answer to GET <path>."""
     try:
         with urllib.request.urlopen(
-            f"http://127.0.0.1:{PORT}/{path}", timeout=2
+            urllib.request.Request(f"http://127.0.0.1:{PORT}/{path}", headers=headers()),
+            timeout=2,
         ) as response:
             return json.loads(response.read())
     except OSError as e:
@@ -231,7 +247,10 @@ def model(name: str) -> None:
 def snapshot(file: str) -> None:
     try:
         with urllib.request.urlopen(
-            f"http://127.0.0.1:{PORT}/snapshot", timeout=10
+            urllib.request.Request(
+                f"http://127.0.0.1:{PORT}/snapshot", headers=headers()
+            ),
+            timeout=10,
         ) as response:
             image, about = response.read(), response.headers.get("X-Face", "")
     except OSError as e:

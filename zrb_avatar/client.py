@@ -18,6 +18,9 @@ from zrb.config.config import CFG
 AVATAR_URL = os.getenv(
     f"{CFG.ENV_PREFIX}_AVATAR_URL", "http://127.0.0.1:7777/event"
 )
+# The token the server asks for once something other than this machine can reach it: the same
+# variable server.py reads, so one setting guards both ends. Empty (the default) sends nothing.
+TOKEN = os.getenv(f"{CFG.ENV_PREFIX}_AVATAR_TOKEN", "")
 MOUTH_STEP = 0.04  # seconds of audio per mouth value
 # Calibration knob: raise it if the mouth barely opens, lower it if it never closes.
 MOUTH_GAIN = float(os.getenv(f"{CFG.ENV_PREFIX}_AVATAR_MOUTH_GAIN", "4"))
@@ -40,9 +43,23 @@ STATUS = {
 }
 
 
+def _headers(**extra: str) -> dict[str, str]:
+    """What every request carries: the token when the server asks for one, plus *extra*.
+
+    <PREFIX>_AVATAR_TOKEN is the same variable server.py reads, so one setting guards both ends.
+    Empty -- the default -- sends nothing at all, which is what a server on 127.0.0.1 wants.
+    """
+    headers = dict(extra)
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
+    return headers
+
+
 def send(message: dict) -> None:
     request = urllib.request.Request(
-        AVATAR_URL, json.dumps(message).encode(), {"Content-Type": "application/json"}
+        AVATAR_URL,
+        json.dumps(message).encode(),
+        _headers(**{"Content-Type": "application/json"}),
     )
     try:
         urllib.request.urlopen(request, timeout=0.2).close()
@@ -50,11 +67,18 @@ def send(message: dict) -> None:
         pass  # face app not running
 
 
+def _open(url: str, timeout: float):
+    """A GET to the server, carrying the token when it wants one."""
+    return urllib.request.urlopen(
+        urllib.request.Request(url, headers=_headers()), timeout=timeout
+    )
+
+
 def ask(path: str, timeout: float = 2):
     """The server's JSON answer to GET <path> ("models", "model"); None while it is not running."""
     url = AVATAR_URL.rsplit("/", 1)[0] + "/" + path
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with _open(url, timeout) as response:
             return json.loads(response.read())
     except (OSError, ValueError):
         return None
@@ -75,7 +99,7 @@ def snapshot(timeout: float = 10) -> tuple[bytes, dict] | None:
     music, emotion); None while the server or the window is not there."""
     url = AVATAR_URL.rsplit("/", 1)[0] + "/snapshot"
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with _open(url, timeout) as response:
             about = json.loads(response.headers.get("X-Face") or "{}")
             return response.read(), about if isinstance(about, dict) else {}
     except (OSError, ValueError):
