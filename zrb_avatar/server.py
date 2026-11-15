@@ -23,6 +23,14 @@ the rest on (see AUTONOMY_DEFAULTS).
 A {"type": "blink", "eyes": "both"|"left"|"right", "seconds": 0.2} event is a blink she chose; it is
 relayed like a pose and not remembered, because a blink that arrived while a page was reloading has
 already happened.
+Audio for a page that is the only microphone and the only speaker: POST /audio takes its
+microphone (16 kHz mono 16-bit, measured or chunked), and GET /audio/in is that same audio handed
+to zrb's dictation; POST /say takes what zrb's speech player made, and GET /audio/out hands it to
+the page. Both GETs are one long response of raw frames, never JSON: the headers name the format,
+and a sentence made at a new sample rate ends the out stream so the page connects again and reads
+that rate rather than playing it at the wrong pitch. Nothing here knows what speech is; audio.py
+holds the two queues and the caps on them.
+
 Stdlib only; run with `python3 server.py` or `zrb-avatar serve`, then open http://localhost:7777.
 
 With ZRB_AVATAR_TOKEN set, every request has to carry that token: `Authorization: Bearer <token>`,
@@ -73,9 +81,9 @@ from importlib import metadata
 from pathlib import Path
 
 try:  # imported as `zrb_avatar.server`, which is how the tests and every tool see her
-    from zrb_avatar import auth
+    from zrb_avatar import audio, auth
 except ImportError:  # run as a script beside the package, which is how `zrb-avatar` starts her
-    import auth
+    import audio, auth
 
 # zrb spells its own settings <ENV_PREFIX>_*, and reads that prefix from the bare
 # `_ZRB_ENV_PREFIX` -- the bootstrap key in zrb's config, deliberately unprefixed so it
@@ -1080,6 +1088,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(music_state())
         if path == "/autonomy":
             return self._json(autonomy_state())
+        if path == "/audio/in":  # the page's microphone, on its way to zrb's dictation
+            return self._relay_audio_to_zrb()
+        if path == "/audio/out":  # what zrb said, on its way to the page
+            return self._relay_speech_to_page()
         if path == "/snapshot":
             shot = take_snapshot()
             if shot is None:
@@ -1148,9 +1160,77 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _body(self):
+        """The request body as it arrives, however the caller measured it.
+
+        A page streaming its microphone sends a chunked body and never says how long it is; a
+        fallback that posts a frame at a time measures each one. Both arrive here, and neither is
+        read with `read(-1)`, which would wait for the client to hang up before the first byte
+        reached a reader.
+        """
+        if (self.headers.get("Transfer-Encoding") or "").strip().lower() == "chunked":
+            yield from self._chunks()
+            return
+        size = self._length(audio.MAX_BODY_BYTES)
+        if size is None:
+            return
+        while size > 0:
+            block = self.rfile.read(min(size, 65536))
+            if not block:
+                return
+            size -= len(block)
+            yield block
+
+    def _chunks(self):
+        """The blocks of a chunked body, up to the one that ends it.
+
+        `fetch(url, {body, duplex: "half"})` is what sends this: the page has no length to give
+        while the microphone is open, and no way to end the request except by ending the body. A
+        body that stops in the middle of a chunk is a page that went away, and ends the same way an
+        ending does -- what arrived is kept, and nothing is waited for.
+        """
+        while True:
+            line = self.rfile.readline(64)
+            try:
+                size = int(line.split(b";")[0].strip(), 16)
+            except ValueError:
+                return
+            if size <= 0:
+                return  # the last chunk, or a page that stopped saying anything at all
+            block = self.rfile.read(size)
+            if len(block) < size:
+                return
+            self.rfile.read(2)  # the CRLF a chunk ends with, which is not audio
+            yield block
+
+    def _write_frames(self, take, rate: int, follows_rate: bool = False):
+        """Write frames as they arrive, and a frame of silence when none does.
+
+        Raw PCM has no comment syntax, so the answer to a quiet queue is silence rather than
+        nothing: one frame of it, inaudible, which is also the only write that notices a page whose
+        tab has gone. *follows_rate* ends the response when a sentence is made at a rate this
+        stream is not at, because the headers are the only place a rate can say what it is.
+        """
+        silence = audio.silence(rate)
+        try:
+            while True:
+                frame = take(audio.PING_SECONDS)
+                if frame is None:
+                    if follows_rate and audio.outbound_rate() not in (None, rate):
+                        return
+                    frame = silence
+                self.wfile.write(frame)
+                self.wfile.flush()
+        except OSError:  # the far end closed: nothing left to say, and nobody to say it to
+            pass
+
     def do_POST(self):
         if not self._allowed():
             return self.send_error(401, "this server wants its token")
+        if self.path == "/audio":  # the page's microphone, until it stops talking
+            return self._take_audio()
+        if self.path == "/say":  # what zrb's speech player made
+            return self._take_speech()
         if self.path.startswith("/snapshot?"):
             return self._snapshot()
         if self.path != "/event":
@@ -1255,6 +1335,72 @@ class Handler(BaseHTTPRequestHandler):
             waiting["done"].set()
         self.send_response(204)
         self.end_headers()
+
+    def _take_audio(self):
+        """The page's microphone: one long request, its blocks handed to zrb as they arrive.
+
+        The format is refused rather than accepted and mistranscribed: audio at another rate is
+        noise to every speech-to-text backend, and a request that says so is a page to fix, not a
+        transcript to read.
+        """
+        rate = (self.headers.get("X-Sample-Rate") or "").strip()
+        channels = (self.headers.get("X-Channels") or "").strip()
+        wanted, mono = str(audio.INBOUND_RATE), str(audio.CHANNELS)
+        if (rate or wanted) != wanted or (channels or mono) != mono:
+            return self.send_error(
+                415,
+                f"audio in is {wanted} Hz mono; got {rate or '?'} Hz, "
+                f"{channels or '?'} channel(s)",
+            )
+        for block in self._body():
+            audio.put_inbound(block)
+        self.send_response(204)
+        self.end_headers()
+
+    def _take_speech(self):
+        """What zrb's speech player made, with the rate it was made at in the header."""
+        try:
+            rate = int((self.headers.get("X-Sample-Rate") or "").strip())
+        except ValueError:
+            rate = 0
+        if not audio.is_supported_rate(rate):
+            return self.send_error(
+                415, "X-Sample-Rate names no rate speech can have"
+            )
+        for block in self._body():
+            audio.put_outbound(block, rate)
+        self.send_response(204)
+        self.end_headers()
+
+    def _relay_audio_to_zrb(self):
+        """The page's microphone, as one long response of raw frames.
+
+        One reader at a time is the point: two would halve the audio between them and neither
+        would transcribe a sentence. Taking the channel first is what makes this reader the one —
+        a reader that has gone is replaced here rather than left holding the next block.
+        """
+        channel = audio.start_reading("in")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Sample-Rate", str(audio.INBOUND_RATE))
+        self.send_header("X-Sample-Width", str(audio.SAMPLE_WIDTH))
+        self.send_header("X-Channels", str(audio.CHANNELS))
+        self.end_headers()
+        self._write_frames(channel.take, audio.INBOUND_RATE)
+
+    def _relay_speech_to_page(self):
+        """What zrb said, as one long response of raw frames, at the rate the headers name."""
+        rate = audio.outbound_rate() or audio.DEFAULT_OUTBOUND_RATE
+        channel = audio.start_reading("out")
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/L16")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Sample-Rate", str(rate))
+        self.send_header("X-Sample-Width", str(audio.SAMPLE_WIDTH))
+        self.send_header("X-Channels", str(audio.CHANNELS))
+        self.end_headers()
+        self._write_frames(channel.take, rate, follows_rate=True)
 
     def _stream(self):
         self.send_response(200)

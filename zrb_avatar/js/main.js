@@ -12,6 +12,7 @@ import { createView } from './view.js';
 import { createBlush } from './blush.js';
 import { createPose } from './pose.js';
 import { createDesktop } from './desktop.js';
+import { createAudio } from './audio.js';
 
 // state -> glow colour
 const LOOK = { idle: '#33ccff88', thinking: '#a6f', tool: '#3f9', attention: '#f46', permission: '#f22', speaking: '#6ef' };
@@ -67,6 +68,20 @@ function setState(value) {
   statusEl.textContent = state;
   followState();
 }
+
+// Her ears and mouth on this page: a microphone zrb hears, and a speaker her voice comes out of. Kept
+// outside `her` because the audio outlives any one model and has to survive the swap, and opened by
+// nothing on load — a browser refuses a microphone and a sound before a gesture, and a refusal reads
+// as a broken page rather than as a browser doing its job. The key below is the gesture.
+const audio = createAudio({
+  // Said on the status line, where a model that will not load says its piece: a microphone the
+  // browser refused has to look like a refusal, not like a switch that does nothing.
+  onState: ({ error }) => {
+    statusEl.textContent = error || state;
+    statusEl.classList.toggle('error', !!error);
+  },
+});
+window.audio = audio; // for a transcript page and for devtools, as window.face is
 
 // Loads <name>.vrm and puts her on screen, in place of whoever was there. Null if it can't be
 // loaded (the one on screen stays); a newer show() wins over an older one still loading, which
@@ -140,6 +155,13 @@ if (!model || !await show(model)) {  // say so, even in the app, instead of show
   throw new Error(statusEl.textContent);
 }
 addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
+// M is the microphone, and with it her voice out of the speaker: one gesture is what a browser asks
+// for before either, and speaking to her is also how you come to hear her answer.
+addEventListener('keydown', e => {
+  if (e.key !== 'm' || e.repeat) return;
+  audio.startEars();
+  audio.toggleMic();
+});
 addEventListener('wheel', e => { e.preventDefault(); her.framing.onWheel(e); her.view.notice(); }, { passive: false }); // not the page's own zoom
 
 // What the user sees right now, for zrb's AvatarLook and `zrb-avatar snapshot`: this frame, from this

@@ -1947,6 +1947,120 @@ for host, token in (("0.0.0.0", ""), ("0.0.0.0", "too-short")):
             raise AssertionError(f"exposed without a usable token: {host} {token!r}")
 auth.refuse_insecure_bind("0.0.0.0", TOKEN, "ZRB_AVATAR_TOKEN")  # guarded: allowed
 
+# The page's ears and mouth: raw 16-bit mono PCM one way, her voice back at whatever rate the
+# backend made it. One format is taken going in — a page that resamples to anything else is refused
+# rather than transcribed as noise — and the outbound rate travels in a header, since raw PCM has
+# nowhere in the body to put it.
+MIC = bytes(range(256)) * 8  # 2048 bytes: 64 ms of 16 kHz mono, quiet enough to hear nothing
+SAID = b"\x01\x02" * 1200  # 2400 bytes at 24 kHz: what speech made, at its own rate
+
+
+def post_audio(path: str, body, headers: dict, chunked: bool = False) -> int:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    payload = [body] if chunked else body  # an iterable is framed as one chunk
+    connection.request(
+        "POST", path, body=payload, headers=headers, encode_chunked=chunked
+    )
+    response = connection.getresponse()
+    response.read()
+    connection.close()
+    return response.status
+
+
+def listen_once(path: str, size: int, send) -> tuple[dict, bytes]:
+    """Attach a reader, put audio through it, and read *size* bytes.
+
+    The live order in both directions: a page opens its stream and is reading before anything is
+    said, and zrb is reading the microphone while the page talks. Attaching first is also what makes
+    this reader the one of its direction — a reader that has gone is replaced by the next, rather
+    than left holding the audio that arrives.
+    """
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    connection.request("GET", path)
+    response = connection.getresponse()
+    time.sleep(0.15)  # registered as the reader, before there is anything to read
+    send()
+    try:
+        return dict(response.getheaders()), response.read(size)
+    finally:
+        connection.close()
+
+
+# A measured body first: the fallback for a browser that will not stream.
+headers, body = listen_once(
+    "/audio/in",
+    len(MIC),
+    lambda: post_audio("/audio", MIC, {"X-Sample-Rate": "16000"}),
+)
+assert body == MIC
+assert headers["X-Sample-Rate"] == "16000"
+assert headers["X-Sample-Width"] == "2" and headers["X-Channels"] == "1"
+
+# And chunked, which is what a page streaming its microphone sends: no length to give.
+_, body = listen_once(
+    "/audio/in",
+    len(MIC),
+    lambda: post_audio("/audio", MIC, {"X-Sample-Rate": "16000"}, chunked=True),
+)
+assert body == MIC
+
+# One reader per direction: a page that reloaded attaches, and the reader it replaced must not be
+# left holding what arrives next — it would write it into a socket nobody is reading.
+abandoned = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+abandoned.request("GET", "/audio/in")
+abandoned.getresponse()
+time.sleep(0.2)
+_, body = listen_once(
+    "/audio/in",
+    len(MIC),
+    lambda: post_audio("/audio", MIC, {"X-Sample-Rate": "16000"}),
+)
+assert body == MIC  # the reader that is attached now, not the one that was left
+abandoned.close()
+
+# Refused, not resampled: speech-to-text takes one rate, and a page that sends another is a page to
+# fix rather than audio to guess at.
+assert post_audio("/audio", MIC, {"X-Sample-Rate": "44100"}) == 415
+assert post_audio("/audio", MIC, {"X-Channels": "2"}) == 415
+
+# Her voice, at the rate she was made at: the page configures its AudioContext from the header.
+headers, body = listen_once(
+    "/audio/out",
+    len(SAID),
+    lambda: post_audio("/say", SAID, {"X-Sample-Rate": "24000"}),
+)
+assert body == SAID and headers["X-Sample-Rate"] == "24000"
+assert post_audio("/say", SAID, {"X-Sample-Rate": "0"}) == 415  # no rate a voice can have
+
+saved_ping = server.audio.PING_SECONDS
+server.audio.PING_SECONDS = 0.05  # so a stream that ends is noticed inside this test
+try:
+    # A sentence at another rate opens a new stream: the one that is open ends rather than playing
+    # it at the old pitch, and what was made is carried to the reader that asks next.
+    old = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    old.request("GET", "/audio/out")
+    old_response = old.getresponse()
+    time.sleep(0.15)
+    assert post_audio("/say", SAID, {"X-Sample-Rate": "22050"}) == 204
+    # To the end of that stream: nothing but the silence it pings with, and then EOF rather than one
+    # sentence played at the other rate's pitch.
+    ended = old_response.read()
+    assert ended.strip(b"\x00") == b"" and len(ended) % 960 == 0  # 20 ms at 24 kHz
+    old.close()
+    fresh = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    fresh.request("GET", "/audio/out")
+    fresh_response = fresh.getresponse()
+    assert dict(fresh_response.getheaders())["X-Sample-Rate"] == "22050"
+    assert fresh_response.read(len(SAID)) == SAID
+    fresh.close()
+
+    # A quiet queue is answered with silence rather than with nothing: raw PCM has no comment
+    # syntax, so one inaudible frame is also the only write that notices a page whose tab has gone.
+    _, body = listen_once("/audio/in", 640, lambda: None)  # 20 ms of 16 kHz mono
+    assert body == b"\x00" * 640
+finally:
+    server.audio.PING_SECONDS = saved_ping
+
 # And the server itself, on the port that is already open above: guarded now, unguarded again after.
 def guarded(path, headers=None):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
