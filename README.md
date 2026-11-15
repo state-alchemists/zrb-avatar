@@ -486,6 +486,7 @@ command run without zrb, so their names are fixed.
 | `ZRB_AVATAR_MOUTH_GAIN` | `4` | `client.py` | How wide the mouth opens for a given loudness: raise it if the mouth barely opens, lower it if it stays wide open. |
 | `ZRB_AVATAR_SUBTITLE` | `on` | `client.py` | Caption under her in the window: the sentence she is speaking, one at a time, and — while she is not speaking — what she is doing (`(thinking…)`, `(working…)`, `(needs you…)`, `(waiting for your answer…)`), dimmed and in italics so it is never read as something she said. `off` sends neither; zrb's own terminal still shows the reply. |
 | `ZRB_AVATAR_URL` | `http://127.0.0.1:7777/event` | `client.py` | Where zrb sends events. |
+| `ZRB_AVATAR_TOKEN` | empty | server, `client.py`, `zrb-avatar` | The secret every request carries once something other than this machine can reach the port: `Authorization: Bearer <token>`, the cookie a first visit with `?token=` leaves, or `?token=` itself. Empty asks for nothing, which is what a server only this machine talks to wants. See [Reaching her from another device](#reaching-her-from-another-device). |
 | `ZRB_AVATAR_HOST` | `127.0.0.1` | server | The address the server listens on. |
 | `ZRB_AVATAR_PORT` | `7777` | server, `zrb-avatar` | The server's port (change `ZRB_AVATAR_URL` to match). |
 | `ZRB_AVATAR_HOME` | `~/.zrb/avatar` | server, `zrb_init.py` | Your folder: models in `models/`, animations in `anim/`, and her own answers — `autonomy.json` (what she agreed to do unasked) and `model` (the model she last chose). |
@@ -497,6 +498,31 @@ command run without zrb, so their names are fixed.
 `7777` is quad digits, easy to say and to type, and nothing is registered to it. It only has
 to stay clear of zrb's web port, `21213`, and the board's `8765`. It is a default rather than
 a decision: `ZRB_AVATAR_PORT` moves it, with `ZRB_AVATAR_URL` following.
+
+### Reaching her from another device
+
+The server listens on `127.0.0.1` and asks for no credential, because a request that arrives there
+came from this machine. Put a phone or a proxy in front of it and that stops being true: anything
+that can reach the port could switch her model, play a clip, put words in her mouth, or ask for a
+picture of the window.
+
+So a token guards it, and setting one is yours to do:
+
+```sh
+export ZRB_AVATAR_TOKEN="$(openssl rand -hex 16)"   # sixteen characters at least
+# and put HTTPS in front of 7777 — `tailscale serve`, in front of the local server
+```
+
+Then open `https://<machine>.<tailnet>.ts.net/?token=$ZRB_AVATAR_TOKEN` once, on the phone. The page
+trades the token for a cookie and redirects to the same address without it, so the home-screen icon
+works from then on and nothing in the page has to know a token exists. Every other caller — zrb's
+hooks, the `zrb-avatar` commands, the window this package opens — reads the same variable and sends
+`Authorization: Bearer`.
+
+`ZRB_AVATAR_HOST` set to anything that is not loopback is refused at start without a token, and with
+one shorter than sixteen characters. There is deliberately no flag that overrides that, for the
+reason zrb's own web bind has none: an override is the thing somebody reaches for once, on a laptop,
+and then forgets.
 
 ### zrb settings it depends on
 

@@ -1891,4 +1891,108 @@ for node in ast.walk(tree):
         continue
     assert _resolves(node) or _rescues(node), (node.module, "no layout resolves")
 
+# The token: what stands in front of her once something other than this machine can reach her.
+# ---------------------------------------------------------------------------------------------
+# Empty is a plain local run, and it must stay exactly what it was: nothing asked for, no header on
+# any of zrb's calls. Set, it guards every route -- the page, the JSON, the event stream and every
+# write alike -- and a first visit with `?token=` trades it for a cookie, because a phone's address
+# is typed once and its own fetches and EventSource carry a cookie without being told to.
+import contextlib  # noqa: E402  (with the block it belongs to, not with the rest)
+import io  # noqa: E402
+
+auth = server.auth
+assert auth.is_loopback("127.0.0.1") and auth.is_loopback("::1") and auth.is_loopback("localhost")
+for exposed in ("0.0.0.0", "192.168.1.4", "100.101.102.103", "her-machine", ""):
+    assert not auth.is_loopback(exposed), exposed  # an unknown name is exposed, not local
+
+assert auth.presented({}, "", "")  # no token wanted: every request is allowed, offered or not
+assert auth.presented({"Cookie": "a=b"}, "model=mine", "")
+
+TOKEN = "correct-horse-battery-staple"  # long enough for an exposed bind
+assert not auth.presented({}, "", TOKEN)  # nothing offered
+assert auth.presented({"Authorization": f"Bearer {TOKEN}"}, "", TOKEN)  # what zrb sends
+assert not auth.presented({"Authorization": f"Bearer {TOKEN[:-1]}x"}, "", TOKEN)
+assert not auth.presented({"Authorization": TOKEN}, "", TOKEN)  # the scheme is not optional
+assert auth.presented({}, f"model=mine&token={TOKEN}", TOKEN)  # what a curl sends
+assert not auth.presented({}, "model=mine", TOKEN)
+assert auth.presented({"Cookie": f"other=1; {auth.COOKIE}={TOKEN}"}, "", TOKEN)  # a page
+assert not auth.presented({"Cookie": f"{auth.COOKIE}=wrong"}, "", TOKEN)
+
+# The cookie it hands back is one the page never reads, and one a same-origin fetch will send.
+assert auth.cookie_header(TOKEN).startswith(f"{auth.COOKIE}={TOKEN}; Path=/; HttpOnly")
+assert auth.wants_a_cookie(f"/?token={TOKEN}", TOKEN)  # the phone's link, on the page
+assert auth.wants_a_cookie(f"/?app&model=mine&token={TOKEN}", TOKEN)  # the window's own address
+assert not auth.wants_a_cookie("/?model=mine", TOKEN)  # an ordinary visit sets nothing
+assert not auth.wants_a_cookie(f"/?token={TOKEN}", "")  # an unguarded server has no cookie
+# Not an API route: a `curl` after JSON is answered with the JSON, not redirected somewhere else.
+assert not auth.wants_a_cookie(f"/models?token={TOKEN}", TOKEN)
+# The redirect keeps the address it was given, minus the token: `?app` is the window's own URL, and
+# rendering it as `app=` would hand the window back a page that is no longer the app.
+assert auth.url_without_token(f"/?app&model=mine&token={TOKEN}") == "/?app&model=mine"
+assert auth.url_without_token(f"/?token={TOKEN}") == "/"
+assert auth.url_without_token(f"/mine.vrm?token={TOKEN}") == "/mine.vrm"
+assert auth.url_without_token("/?app") == "/?app"  # nothing to take out
+
+# A bind anyone can reach is refused without a usable token, and there is no flag that talks it out
+# of it: an exposed face switches models, plays clips and photographs the window.
+quiet = contextlib.redirect_stderr(io.StringIO())
+auth.refuse_insecure_bind("127.0.0.1", "", "ZRB_AVATAR_TOKEN")  # loopback: never a refusal
+for host, token in (("0.0.0.0", ""), ("0.0.0.0", "too-short")):
+    with quiet:
+        try:
+            auth.refuse_insecure_bind(host, token, "ZRB_AVATAR_TOKEN")
+        except SystemExit as stopped:
+            assert stopped.code == 1, stopped.code
+        else:
+            raise AssertionError(f"exposed without a usable token: {host} {token!r}")
+auth.refuse_insecure_bind("0.0.0.0", TOKEN, "ZRB_AVATAR_TOKEN")  # guarded: allowed
+
+# And the server itself, on the port that is already open above: guarded now, unguarded again after.
+def guarded(path, headers=None):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    connection.request("GET", path, headers=headers or {})
+    response = connection.getresponse()
+    answer = response.status, response.read(), dict(response.getheaders())
+    connection.close()
+    return answer
+
+
+def guarded_post(path, body, headers=None):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    connection.request("POST", path, body, headers=headers or {})
+    response = connection.getresponse()
+    response.read()
+    connection.close()
+    return response.status
+
+
+server.TOKEN = TOKEN
+try:
+    assert guarded("/")[0] == 401  # the page, the JSON and the event stream alike
+    assert guarded("/models")[0] == 401
+    assert guarded("/events")[0] == 401
+    assert guarded("/mine.vrm")[0] == 401
+    assert guarded_post("/event", '{"type":"state","value":"idle"}') == 401
+    assert guarded("/", {"Authorization": f"Bearer {TOKEN}"})[0] == 200
+    assert guarded("/models", {"Authorization": f"Bearer {TOKEN}"})[0] == 200
+    assert guarded("/models", {"Cookie": f"{auth.COOKIE}={TOKEN}"})[0] == 200
+    assert guarded(f"/models?token={TOKEN}")[0] == 200
+    assert (
+        guarded_post(
+            "/event",
+            '{"type":"state","value":"idle"}',
+            {"Authorization": f"Bearer {TOKEN}"},
+        )
+        == 204
+    )
+    # The phone's one typed address: the token goes out, a cookie comes back, and the page loads.
+    status, _, sent = guarded(f"/?app&model=mine&token={TOKEN}")
+    assert status == 302 and sent["Location"] == "/?app&model=mine", (status, sent.get("Location"))
+    assert sent["Set-Cookie"].startswith(f"{auth.COOKIE}={TOKEN}; Path=/")
+    # A wrong one is refused rather than traded for a cookie.
+    assert guarded("/?token=wrong")[0] == 401
+finally:
+    server.TOKEN = ""  # back to a plain local run, which is what the rest of this file assumes
+assert guarded("/models")[0] == 200  # nothing set: answered as before
+
 print("ok")

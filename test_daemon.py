@@ -141,7 +141,7 @@ def check_status_names_the_pid_and_whether_it_answers() -> None:
         daemon.write_pid(path, 4242)
         with mock.patch.object(cli, "PID", path):
             with mock.patch.object(daemon, "running", lambda pid: True):
-                with mock.patch.object(daemon, "answering", lambda url, timeout=1.0: True):
+                with mock.patch.object(daemon, "answering", lambda url, timeout=1.0, headers=None: True):
                     printed = io.StringIO()
                     with contextlib.redirect_stdout(printed):
                         cli.status()
@@ -156,13 +156,36 @@ def check_status_says_a_stale_pid_file_is_stale() -> None:
         daemon.write_pid(path, 4242)
         with mock.patch.object(cli, "PID", path):
             with mock.patch.object(daemon, "running", lambda pid: False):
-                with mock.patch.object(daemon, "answering", lambda url, timeout=1.0: False):
+                with mock.patch.object(daemon, "answering", lambda url, timeout=1.0, headers=None: False):
                     printed = io.StringIO()
                     with contextlib.redirect_stdout(printed):
                         cli.status()
         said = printed.getvalue()
     assert "is gone" in said, said
     assert "not answering" in said, said
+
+
+def check_status_carries_the_token_a_guarded_server_asks_for() -> None:
+    """`status` has to send the token, or a guarded server answers 401 and reads as not there."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "server.pid"
+        daemon.write_pid(path, 4242)
+        asked = {}
+
+        def answer(url, timeout=1.0, headers=None):
+            asked.update(headers or {})
+            return True
+
+        with mock.patch.object(cli, "PID", path):
+            with mock.patch.object(daemon, "running", lambda pid: True):
+                with mock.patch.object(cli, "TOKEN", "a-secret-long-enough"):
+                    with mock.patch.object(daemon, "answering", answer):
+                        printed = io.StringIO()
+                        with contextlib.redirect_stdout(printed):
+                            cli.status()
+        said = printed.getvalue()
+    assert asked.get("Authorization") == "Bearer a-secret-long-enough", asked
+    assert "answering" in said, said
 
 
 for name, check in sorted(globals().items()):

@@ -197,10 +197,18 @@ def write_pid(path: Path, pid: int) -> None:
     path.write_text(f"{pid}\n{identity}\n", encoding="utf-8")
 
 
-def answering(url: str, timeout: float = 1.0) -> bool:
-    """Whether something at *url* answers at all -- the cheapest "is it up"."""
+def answering(
+    url: str, timeout: float = 1.0, headers: dict[str, str] | None = None
+) -> bool:
+    """Whether something at *url* answers at all -- the cheapest "is it up".
+
+    *headers* is what the request carries, which is where a server's token goes: without it a
+    guarded server answers 401 and this would report a server that is running as one that is not.
+    """
     try:
-        urllib.request.urlopen(url, timeout=timeout).close()
+        urllib.request.urlopen(
+            urllib.request.Request(url, headers=headers or {}), timeout=timeout
+        ).close()
     except (urllib.error.URLError, OSError):
         return False
     return True
