@@ -1076,6 +1076,12 @@ def set_page_cameras(page: str, names: object) -> None:
             _cameras.pop(page, None)  # a page allowed nothing knows nothing
 
 
+def forget_page_cameras(page: str) -> None:
+    """Drop what *page* reported: its cameras went with the page that named them."""
+    with _cameras_lock:
+        _cameras.pop(page, None)
+
+
 def _status_reason(sentence: str) -> str:
     """*sentence* as a status line's reason: one line, ASCII, and short enough to be one.
 
@@ -1335,20 +1341,24 @@ class Handler(BaseHTTPRequestHandler):
             self.rfile.read(2)  # the CRLF a chunk ends with, which is not audio
             yield block
 
-    def _write_frames(self, take, rate: int, follows_rate: bool = False):
+    def _write_frames(self, channel, rate: int, follows_rate: bool = False):
         """Write frames as they arrive, and a frame of silence when none does.
 
         Raw PCM has no comment syntax, so the answer to a quiet queue is silence rather than
         nothing: one frame of it, inaudible, which is also the only write that notices a page whose
         tab has gone. *follows_rate* ends the response when a sentence is made at a rate this
-        stream is not at, because the headers are the only place a rate can say what it is.
+        stream is not at, because the headers are the only place a rate can say what it is -- and a
+        channel that has been replaced ends it at once, since the page asks again as soon as this
+        response ends, and waiting for that is waiting for the next sentence.
         """
         silence = audio.silence(rate)
         try:
-            while True:
-                frame = take(audio.PING_SECONDS)
+            while not channel.ended:
+                frame = channel.take(audio.PING_SECONDS)
                 if frame is None:
-                    if follows_rate and audio.outbound_rate() not in (None, rate):
+                    if channel.ended or (
+                        follows_rate and audio.outbound_rate() not in (None, rate)
+                    ):
                         return
                     frame = silence
                 self.wfile.write(frame)
@@ -1616,7 +1626,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Sample-Width", str(audio.SAMPLE_WIDTH))
         self.send_header("X-Channels", str(audio.CHANNELS))
         self.end_headers()
-        self._write_frames(channel.take, audio.INBOUND_RATE)
+        self._write_frames(channel, audio.INBOUND_RATE)
 
     def _relay_speech_to_page(self):
         """What zrb said, as one long response of raw frames, at the rate the headers name.
@@ -1633,7 +1643,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Sample-Width", str(audio.SAMPLE_WIDTH))
         self.send_header("X-Channels", str(audio.CHANNELS))
         self.end_headers()
-        self._write_frames(channel.take, rate, follows_rate=True)
+        self._write_frames(channel, rate, follows_rate=True)
 
     def _stream(self):
         self.send_response(200)
@@ -1675,7 +1685,12 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 _clients.discard(client)
                 _showing.pop(client, None)
-                _page_ids.pop(client, None)
+                page = _page_ids.pop(client, None)
+                # A stream that reconnects carries the same id, so a page is only gone when no
+                # stream of its own is still open.
+                gone = page is not None and page not in _page_ids.values()
+            if page is not None and gone:
+                forget_page_cameras(page)  # its cameras went with it
 
     def log_message(self, format, *args):
         pass

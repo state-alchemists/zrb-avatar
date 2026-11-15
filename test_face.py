@@ -1222,6 +1222,27 @@ photo = client.getresponse()
 assert photo.status == 200 and photo.read() == JPEG  # the phone's, though the laptop answered sooner
 server.FRAME_SECONDS = saved_frame_seconds  # the real deadline back, for anything after this
 
+# A page's cameras go with the page. A report kept for a page that has gone would grow by one set of
+# names per reload, and `/frame/devices` would keep offering cameras from tabs that are closed.
+leaving = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+leaving.request("GET", "/events?page=a-page-that-leaves")
+leaving.getresponse()
+time.sleep(0.2)
+client.request(
+    "POST",
+    "/frame/devices?page=a-page-that-leaves",
+    json.dumps({"devices": ["a camera that left"]}),
+)
+assert client.getresponse().status == 204
+assert "a camera that left" in server.page_cameras()
+leaving.close()  # gone without saying anything, which is how a closed tab goes
+# The server finds a page that has gone by writing to it, so it has to be written to twice: the
+# first write goes out unanswered and the second meets the reset.
+for _ in range(3):
+    server.broadcast(json.dumps({"type": "state", "value": "idle"}))
+    time.sleep(0.15)
+assert "a camera that left" not in server.page_cameras()
+
 # The watcher: a player's line becomes a music event, and the state is only sent when it changes.
 server.set_music(False)
 server.watch_music(
@@ -2205,6 +2226,25 @@ next_channel, next_rate = server.audio.start_reading_outbound()
 assert next_rate == 24000 and next_channel is not old_channel
 assert next_channel.take(1) == SAID  # carried over: the sentence made for the stream that asks
 assert old_channel.take(0.05) is None  # and the reader it replaced is left with nothing
+
+# And the reader is told the moment its stream is replaced, rather than at the end of its own read
+# timeout: the page asks again as soon as this response ends, so fifteen seconds of waiting here is
+# fifteen seconds of silence in the middle of a conversation.
+saved_ping = server.audio.PING_SECONDS
+server.audio.PING_SECONDS = 15.0  # the read that a replaced stream must not have to wait out
+try:
+    stale = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+    stale.request("GET", "/audio/out")
+    stale_response = stale.getresponse()
+    time.sleep(0.15)  # the stream is the reader before anything is said
+    started = time.monotonic()
+    assert post_audio("/say", SAID, {"X-Sample-Rate": "16000"}) == 204
+    ended = stale_response.read()  # to the end of the response, which the rate change ends
+    assert time.monotonic() - started < 1.0  # ended because it was replaced, not by a timeout
+    assert ended.strip(b"\x00") == b""  # and nothing of the new sentence at the old pitch
+    stale.close()
+finally:
+    server.audio.PING_SECONDS = saved_ping
 
 # And the server itself, on the port that is already open above: guarded now, unguarded again after.
 def guarded(path, headers=None):

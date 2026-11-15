@@ -58,15 +58,19 @@ PING_SECONDS = 15.0
 MAX_BODY_BYTES = 1_000_000
 
 
+_END = object()  # not audio: the marker that wakes a reader whose channel has been replaced
+
+
 class Channel:
     """One direction of audio: blocks in, blocks out, and a cap that drops the oldest."""
 
     def __init__(self, keep_seconds: float = KEEP_SECONDS) -> None:
         # Counted in blocks rather than bytes: a block is whatever a reader last wrote, and every
         # writer here writes far less than a second of audio at a time.
-        self._blocks: "queue.Queue[bytes]" = queue.Queue(
+        self._blocks: "queue.Queue[object]" = queue.Queue(
             maxsize=max(1, int(keep_seconds))
         )
+        self._ended = threading.Event()
 
     def put(self, pcm: bytes) -> None:
         """Add *pcm*, dropping the oldest block to make room when full.
@@ -74,22 +78,30 @@ class Channel:
         Dropping is the point: a reader that cannot keep up must not be handed a backlog it will
         spend the next sentence working through. What goes is audio from before now.
         """
-        while True:
-            try:
-                self._blocks.put_nowait(pcm)
-                return
-            except queue.Full:
-                try:
-                    self._blocks.get_nowait()
-                except queue.Empty:  # another thread drained it first; the put can be retried
-                    pass
+        self._offer(pcm)
 
     def take(self, timeout: float) -> bytes | None:
-        """The next block, waiting up to *timeout*; None when nothing came."""
+        """The next block, waiting up to *timeout*; None when nothing came or this channel ended."""
         try:
-            return self._blocks.get(timeout=timeout)
+            block = self._blocks.get(timeout=timeout)
         except queue.Empty:
             return None
+        return block if isinstance(block, bytes) else None  # the end marker is not audio
+
+    def close(self) -> None:
+        """End this channel: a reader waiting in `take` wakes now, not at the end of its timeout.
+
+        A reader that has been replaced has nothing more to write, and the page asks again as soon
+        as its response ends -- so the end is the answer, and waiting out a fifteen-second read
+        timeout is fifteen seconds of silence in the middle of a conversation.
+        """
+        self._ended.set()  # before the marker, so a reader that wakes knows why it woke
+        self._offer(_END)
+
+    @property
+    def ended(self) -> bool:
+        """Whether `close` has ended this channel."""
+        return self._ended.is_set()
 
     def clear(self) -> None:
         """Throw away what is waiting, so the next reader starts at now."""
@@ -104,9 +116,23 @@ class Channel:
         blocks = []
         while True:
             try:
-                blocks.append(self._blocks.get_nowait())
+                block = self._blocks.get_nowait()
             except queue.Empty:
                 return blocks
+            if block is not _END:
+                blocks.append(block)
+
+    def _offer(self, block: object) -> None:
+        """Add *block*, dropping the oldest to make room when full; see `put` for why."""
+        while True:
+            try:
+                self._blocks.put_nowait(block)
+                return
+            except queue.Full:
+                try:
+                    self._blocks.get_nowait()
+                except queue.Empty:  # another thread drained it first; the put can be retried
+                    pass
 
 
 _channels: dict[str, Channel] = {"in": Channel(), "out": Channel()}
@@ -156,6 +182,7 @@ def _swap_channel(direction: str) -> "Channel":
     for block in previous.drain():
         channel.put(block)
     _channels[direction] = channel
+    previous.close()  # the reader it had is over: it is told, rather than left to time out
     return channel
 
 
@@ -184,8 +211,12 @@ def put_outbound(pcm: bytes, rate: int) -> None:
     with _channels_lock:  # held across the put, as `put_inbound`'s is
         if _outbound_format["rate"] not in (None, rate):
             # A new stream, and the old backlog goes with the old rate: those blocks would play at
-            # this sentence's pitch if they were carried over.
+            # this sentence's pitch if they were carried over. The reader still on it is told its
+            # stream is over, so it ends now and the page asks again -- for the rate this sentence
+            # is being made at -- rather than after a read timeout with silence in between.
+            previous = _channels["out"]
             _channels["out"] = Channel()
+            previous.close()
         _outbound_format["rate"] = rate
         if pcm:
             _channels["out"].put(pcm)
