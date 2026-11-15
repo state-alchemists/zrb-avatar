@@ -129,6 +129,10 @@ SNAPSHOT_SECONDS = 6.0  # how long GET /snapshot waits for a page to answer
 # switch leaves the old model on screen until the new file has loaded: in both cases the
 # window is there, and the picture that arrives is of the wrong thing.
 SNAPSHOT_INSIST_SECONDS = 2.0
+MAX_FRAME_BYTES = 24_000_000  # a phone's JPEG as a data: URL, which inflates it by a third
+# How long GET /frame waits for a page to answer: longer than a snapshot, because a camera has to
+# open before it can take anything, and a phone takes a moment to do that.
+FRAME_SECONDS = 12.0
 AUTONOMY = (
     "dance",
     "blush",
@@ -238,6 +242,14 @@ _autonomy: dict = dict(AUTONOMY_DEFAULTS)  # what she agreed to; see load_autono
 _snapshots: dict[str, dict] = (
     {}
 )  # id -> {"done": Event, "image": bytes, "about": dict}, while asked for
+_frames: dict[str, dict] = (
+    {}
+)  # id -> {"done": Event, "image": bytes, "refusal": str}, while asked for
+# The names the page last gave its cameras (POST /frame/devices). A page labels a camera only
+# once it has been allowed one, so this is a report rather than a discovery, and it is replaced
+# rather than merged each time.
+_cameras: list[str] = []
+_cameras_lock = threading.Lock()
 
 # Prints "Playing" or "Paused" whenever any media session (a browser, Spotify, ...) changes.
 _WINDOWS_MEDIA = r"""
@@ -959,6 +971,69 @@ def take_snapshot(timeout: float = SNAPSHOT_SECONDS) -> tuple[bytes, dict] | Non
         _snapshots.pop(key, None)
 
 
+def take_frame(
+    device: str | None, timeout: float = FRAME_SECONDS
+) -> tuple[bytes, str]:
+    """Ask the open pages for a photo from *device*; the first to answer wins.
+
+    There is nothing to insist on, as a snapshot insists on the chosen model: any page holding
+    the named camera is as good as another. A page that is reloading is still worth waiting for,
+    so the ask is repeated for as long as the timeout lasts and a page that connects late still
+    answers. The second value is what a page said when it could not take the photo -- which is
+    the sentence the user needs, rather than a failure with no reason -- and an empty image means
+    no photo at all.
+    """
+    key = secrets.token_hex(8)
+    waiting = _frames[key] = {"done": threading.Event(), "image": b"", "refusal": ""}
+    message = json.dumps({"type": "frame", "id": key, "device": device or ""})
+    deadline = time.monotonic() + timeout
+    asked: set[queue.Queue] = set()  # each page is asked once: one answer ends this
+    try:
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                return b"", waiting["refusal"]
+            with _lock:
+                for page in list(_clients):
+                    if page not in asked:
+                        asked.add(page)
+                        page.put(message)
+            if waiting["done"].wait(min(0.5, deadline - now)):
+                return waiting["image"], waiting["refusal"]
+    finally:
+        _frames.pop(key, None)
+
+
+def page_cameras() -> list[str]:
+    """The camera names the page last reported, which are labels rather than ids.
+
+    A browser hides a camera's label until the page has been allowed one, so this is empty on a
+    page nobody has granted the camera yet, and filling in is the report that it happened.
+    """
+    with _cameras_lock:
+        return list(_cameras)
+
+
+def set_page_cameras(names: object) -> None:
+    """Replace the page's camera names; a page reports what it can see now, not an addition."""
+    cleaned = [
+        name.strip() for name in names if isinstance(name, str) and name.strip()
+    ] if isinstance(names, list) else []
+    with _cameras_lock:
+        _cameras[:] = cleaned
+
+
+def _status_reason(sentence: str) -> str:
+    """*sentence* as a status line's reason: one line, ASCII, and short enough to be one.
+
+    `send_error` puts it in the reason phrase, which is the one place a page's own words reach
+    zrb — the client repeats that instead of guessing — so it leaves here as a phrase a header
+    can carry rather than as text that would end the line early.
+    """
+    line = " ".join(sentence.split()).encode("ascii", "replace").decode("ascii")[:200]
+    return line or "the page could not take the photo"
+
+
 def _send_all(message: str) -> None:
     """Put one line in every open page's queue. The caller holds `_lock`."""
     for client in _clients:
@@ -1104,6 +1179,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(image)
             return
+        if path == "/frame":  # a camera this machine does not have: the page's own
+            return self._page_frame()
+        if path == "/frame/devices":  # the names the page last gave its cameras
+            return self._json({"devices": page_cameras()})
         if path == "/":
             return self._send(
                 (HERE / "face.html").read_bytes(), "text/html; charset=utf-8"
@@ -1233,6 +1312,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._take_speech()
         if self.path.startswith("/snapshot?"):
             return self._snapshot()
+        if self.path == "/frame/devices":  # the page's cameras, as the page names them
+            return self._take_camera_names()
+        if self.path.startswith("/frame?"):
+            return self._frame()
         if self.path != "/event":
             return self.send_error(404)
         size = self._length(MAX_EVENT_BYTES)
@@ -1333,6 +1416,90 @@ class Handler(BaseHTTPRequestHandler):
                 "chosen": chosen_model(),
             }
             waiting["done"].set()
+        self.send_response(204)
+        self.end_headers()
+
+    def _page_frame(self):
+        """One photo from the page's camera, as the page itself sees it.
+
+        A refusal is a status rather than an empty body: the page said a sentence -- it was not
+        allowed the camera, the camera is held by another app -- and the reason phrase is where
+        that sentence reaches zrb, which repeats it. An empty photo with no sentence would be a
+        failure the user cannot act on.
+        """
+        device = (
+            urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get(
+                "device", [""]
+            )[0]
+            or ""
+        ).strip()
+        image, refusal = take_frame(device or None)
+        if image:
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(image)))
+            self.end_headers()
+            self.wfile.write(image)
+            return
+        if refusal:
+            return self.send_error(503, _status_reason(refusal))
+        return self.send_error(
+            504, _status_reason(f"no page took a photo from {device or 'its camera'}")
+        )
+
+    def _frame(self):
+        """A page's answer to a frame request: {"image": "data:image/jpeg;base64,..."} or
+        {"refusal": "the browser would not give me the camera"}. Only for an id asked for."""
+        key = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get(
+            "id", [""]
+        )[0]
+        waiting = _frames.get(key)
+        if waiting is None:
+            return self.send_error(404)
+        size = self._length(MAX_FRAME_BYTES)
+        if size is None:
+            return
+        try:
+            answer = json.loads(self.rfile.read(size))
+        except ValueError:
+            return self.send_error(400)
+        if not isinstance(answer, dict):
+            return self.send_error(400)
+        image = b""
+        if "image" in answer:
+            try:
+                header, data = answer["image"].split(",", 1)
+                if header != "data:image/jpeg;base64":
+                    raise ValueError(header)
+                image = base64.b64decode(data, validate=True)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                return self.send_error(400)
+        refusal = "" if image else str(answer.get("refusal") or "").strip()
+        if not refusal and not image:
+            refusal = "the page sent no photo and no reason"
+        if not waiting["done"].is_set():
+            waiting["image"], waiting["refusal"] = image, refusal
+            waiting["done"].set()
+        self.send_response(204)
+        self.end_headers()
+
+    def _take_camera_names(self):
+        """The names a page gives its cameras: labels, replaced on each report.
+
+        A page labels a camera only once it has been allowed one, so this is a report and not a
+        discovery, and the last report is the whole truth: a page allowed nothing knows nothing.
+        """
+        size = self._length(MAX_EVENT_BYTES)
+        if size is None:
+            return
+        try:
+            payload = json.loads(self.rfile.read(size))
+        except ValueError:
+            return self.send_error(400)
+        names = payload.get("devices") if isinstance(payload, dict) else None
+        if not isinstance(names, list):
+            return self.send_error(400, 'a camera report is {"devices": [name, ...]}')
+        set_page_cameras(names)
         self.send_response(204)
         self.end_headers()
 

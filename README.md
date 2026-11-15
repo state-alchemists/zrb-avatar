@@ -524,6 +524,23 @@ one shorter than sixteen characters. There is deliberately no flag that override
 reason zrb's own web bind has none: an override is the thing somebody reaches for once, on a laptop,
 and then forgets.
 
+### The phone's microphone, speaker and camera
+
+A page on the phone can be zrb's ears, its mouth, and one of its cameras: set
+`ZRB_LLM_VOICE_REMOTE_URL` to the page's URL and zrb's dictation, its speech player and its camera
+ask the page instead of this machine's own devices. With the camera left at `auto`, a name the page
+lists is taken from the page, and the machine's own cameras stay candidates for anything else.
+
+The page opens nothing by itself; a browser wants a gesture, and a prompt with nothing behind it
+reads as a broken page:
+
+- `m` gives it the microphone and starts her voice out of the phone's speaker.
+- `c` gives it the camera. A browser hides a phone's camera names until a page has been allowed
+  one, so this is also how `/photo` comes to have a name to ask for; the status line says what it
+  found, and after that `/photo back camera` is enough. The camera opens for one photo and closes
+  again — a phone in a pocket is not filming — and a page that cannot take one says why, which is
+  the sentence zrb repeats under `/photo`.
+
 ### zrb settings it depends on
 
 | Setting | Why it matters |

@@ -1089,6 +1089,81 @@ face_client.AVATAR_URL, saved = "http://127.0.0.1:9/event", face_client.AVATAR_U
 assert face_client.snapshot(timeout=1) is None  # no server: no picture, no exception
 face_client.AVATAR_URL = saved
 
+# zrb's remote camera: GET /frame asks the open page for one photo from a camera this machine does
+# not have, and the page answers with a JPEG -- or with the sentence saying why it could not, which
+# travels as the reason phrase, so /photo can say something the user can act on.
+JPEG = b"\xff\xd8\xff\xe0a phone's photo, near enough"
+
+
+def photographer(answer):
+    """A page: reads the event stream and answers the first frame request with *answer*."""
+    page = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    page.request("GET", "/events")
+    events = page.getresponse()
+    while True:
+        line = events.readline().decode()
+        if line.startswith("data: ") and '"frame"' in line:
+            key = json.loads(line.removeprefix("data: "))["id"]
+            post = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            post.request("POST", f"/frame?id={key}", json.dumps(answer))
+            assert post.getresponse().status == 204
+            return
+
+
+threading.Thread(
+    target=photographer,
+    args=({"image": "data:image/jpeg;base64," + base64.b64encode(JPEG).decode()},),
+    daemon=True,
+).start()
+time.sleep(0.3)  # let it connect
+client.request("GET", "/frame?device=phone-back")
+photo = client.getresponse()
+assert photo.status == 200 and photo.getheader("Content-Type") == "image/jpeg"
+assert photo.read() == JPEG
+# A page that cannot use its camera says why: the refusal is a status, and the sentence is the
+# reason zrb repeats rather than a photo that is simply missing.
+REFUSAL = "the page was not allowed to use its camera"
+threading.Thread(target=photographer, args=({"refusal": REFUSAL},), daemon=True).start()
+time.sleep(0.3)
+client.request("GET", "/frame?device=phone-back")
+refused = client.getresponse()
+assert refused.status == 503 and REFUSAL in refused.reason
+refused.read()
+# An id nobody asked for is refused; so is a body that is not a JPEG; and a page with neither a
+# photo nor a reason still says something, since a failure with no words is the one zrb cannot pass
+# on to the user.
+client.request("POST", "/frame?id=made-up", '{"image": "data:image/jpeg;base64,AAAA"}')
+assert client.getresponse().status == 404
+server._frames["waiting"] = {"done": threading.Event(), "image": b"", "refusal": ""}
+try:
+    for body, code in (
+        ('{"image": "data:image/png;base64,AAAA"}', 400),
+        ("not json", 400),
+        ("[]", 400),
+        ("{}", 204),
+    ):
+        client.request("POST", "/frame?id=waiting", body)
+        assert client.getresponse().status == code, body
+    assert server._frames["waiting"]["refusal"]  # a sentence, not an empty failure
+    for length, code in (("nope", 400), ("-1", 400), (str(server.MAX_FRAME_BYTES + 1), 413)):
+        assert post_raw("/frame?id=waiting", length) == code
+finally:
+    server._frames.pop("waiting")
+assert server.take_frame("nothing", timeout=0.3) == (b"", "")  # no page answers: no photo
+
+# The names the page gives its cameras. A page labels a camera only once it has been allowed one, so
+# this is a report rather than a discovery, and the last report is the whole truth.
+client.request(
+    "POST", "/frame/devices", json.dumps({"devices": ["back camera", "front camera", "  "]})
+)
+assert client.getresponse().status == 204
+client.request("GET", "/frame/devices")
+assert json.loads(client.getresponse().read()) == {"devices": ["back camera", "front camera"]}
+assert server.page_cameras() == ["back camera", "front camera"]
+client.request("POST", "/frame/devices", json.dumps(["not", "a report"]))
+assert client.getresponse().status == 400  # a report that is not one changes nothing
+assert server.page_cameras() == ["back camera", "front camera"]
+
 # The watcher: a player's line becomes a music event, and the state is only sent when it changes.
 server.set_music(False)
 server.watch_music(

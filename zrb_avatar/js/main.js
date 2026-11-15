@@ -13,6 +13,7 @@ import { createBlush } from './blush.js';
 import { createPose } from './pose.js';
 import { createDesktop } from './desktop.js';
 import { createAudio } from './audio.js';
+import { createCamera } from './camera.js';
 
 // state -> glow colour
 const LOOK = { idle: '#33ccff88', thinking: '#a6f', tool: '#3f9', attention: '#f46', permission: '#f22', speaking: '#6ef' };
@@ -82,6 +83,18 @@ const audio = createAudio({
   },
 });
 window.audio = audio; // for a transcript page and for devtools, as window.face is
+
+// The camera in this page, which is the phone's: zrb asks for one photo at a time (see camera.js).
+// The names are published on the way up, without asking anything, so a page allowed a camera in an
+// earlier visit is a camera zrb can name again after a reload.
+const pageCamera = createCamera({
+  onState: ({ names, error }) => {
+    statusEl.textContent = error || (names.length ? `camera: ${names.join(', ')}` : state);
+    statusEl.classList.toggle('error', !!error);
+  },
+});
+pageCamera.publish();
+window.pageCamera = pageCamera;
 
 // Loads <name>.vrm and puts her on screen, in place of whoever was there. Null if it can't be
 // loaded (the one on screen stays); a newer show() wins over an older one still loading, which
@@ -161,6 +174,12 @@ addEventListener('keydown', e => {
   if (e.key !== 'm' || e.repeat) return;
   audio.startEars();
   audio.toggleMic();
+});
+// C is the camera: the same one gesture a browser asks for, so the names it was keeping private
+// become names zrb can ask for (`/photo phone-back`), and the status line says what they are.
+addEventListener('keydown', e => {
+  if (e.key !== 'c' || e.repeat) return;
+  pageCamera.ask();
 });
 addEventListener('wheel', e => { e.preventDefault(); her.framing.onWheel(e); her.view.notice(); }, { passive: false }); // not the page's own zoom
 
@@ -304,6 +323,10 @@ function onEvent({ data }) {
     followState();
   } else if (msg.type === 'snapshot') {
     snapshot(msg.id);
+  } else if (msg.type === 'frame') {
+    // One photo from this page's camera, by the name zrb asked for: the phone in your hand, on its
+    // way to /photo. Answered by id, so a refusal reaches the ask that wanted it.
+    pageCamera.answer(msg.id, msg.device);
   } else if (msg.type === 'autonomy') {
     // What she agreed to. Applied at once: a switch she just turned off should not wait for the
     // next clip, or for the reply that follows this one.
