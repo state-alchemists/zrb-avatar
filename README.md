@@ -534,12 +534,17 @@ lists is taken from the page, and the machine's own cameras stay candidates for 
 The page opens nothing by itself; a browser wants a gesture, and a prompt with nothing behind it
 reads as a broken page:
 
-- `m` gives it the microphone and starts her voice out of the phone's speaker.
+- `m` gives it the microphone and starts her voice out of the phone's speaker; `m` again takes both
+  back, so a page with the microphone off is not still asking for silence to play.
 - `c` gives it the camera. A browser hides a phone's camera names until a page has been allowed
   one, so this is also how `/photo` comes to have a name to ask for; the status line says what it
   found, and after that `/photo back camera` is enough. The camera opens for one photo and closes
   again — a phone in a pocket is not filming — and a page that cannot take one says why, which is
   the sentence zrb repeats under `/photo`.
+
+Two pages can be open at once — the laptop and the phone — and each one keeps its own camera names:
+a photo is asked of the page that named the camera, and a page that answers "I have no such camera"
+cannot become the answer while the page that does have one is still taking the photo.
 
 ### zrb settings it depends on
 

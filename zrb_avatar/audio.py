@@ -124,19 +124,39 @@ def start_reading(direction: str) -> Channel:
     to a socket nobody is reading. The reader is handed a fresh channel, and writers always reach
     whichever channel is current, so a reader that was replaced has nothing left to take and ends on
     its own timeout.
+    """
+    with _channels_lock:
+        return _swap_channel(direction)
+
+
+def start_reading_outbound() -> tuple["Channel", int]:
+    """Become the only reader of her speech: the channel, and the rate it is being made at.
+
+    The two come out together because the page learns its rate from the response's headers. A
+    sentence at another rate rotates the channel under `put_outbound`, so a reader that read the
+    rate and took the channel in two steps could name one rate over the blocks of the other -- and
+    the page would play the sentence at the wrong pitch. One lock, so the pair always describes the
+    same stream; a rotation after this returns ends this stream rather than changing its rate.
+    """
+    with _channels_lock:
+        channel = _swap_channel("out")
+        return channel, _outbound_format["rate"] or DEFAULT_OUTBOUND_RATE
+
+
+def _swap_channel(direction: str) -> "Channel":
+    """A fresh channel in place of the one there; call with `_channels_lock` held.
 
     What was waiting is carried over rather than dropped: a page whose stream just ended re-asks at
     once, and the sentence already made for it must not go with the reader that left. It is one
     hand-over inside one lock, so nothing can be written into the channel being replaced between
     reading it and swapping it.
     """
-    with _channels_lock:
-        previous = _channels[direction]
-        channel = Channel()
-        for block in previous.drain():
-            channel.put(block)
-        _channels[direction] = channel
-        return channel
+    previous = _channels[direction]
+    channel = Channel()
+    for block in previous.drain():
+        channel.put(block)
+    _channels[direction] = channel
+    return channel
 
 
 def put_inbound(pcm: bytes) -> None:

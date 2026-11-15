@@ -61,6 +61,10 @@ let events = null; // the server's, see connect()
 // happened to arrive last, and `run` says a reloaded page outranks everything the last one said.
 const viewRun = Math.random().toString(36).slice(2);
 let viewSeq = 0;
+// This page's own name, which is the run above: a reload is a new page with a new run, and the
+// server keeps each page's camera names by it, so a photo is asked of the page that has the camera
+// rather than of every page in the room.
+const pageId = viewRun;
 const followState = () => her?.motion.want(state === 'idle' && music && autonomy.dance ? 'dance' : state);
 function setState(value) {
   if (value === 'idle' && (state === 'thinking' || state === 'tool')) her?.expression.smileSoon(); // done: a smile
@@ -88,6 +92,7 @@ window.audio = audio; // for a transcript page and for devtools, as window.face 
 // The names are published on the way up, without asking anything, so a page allowed a camera in an
 // earlier visit is a camera zrb can name again after a reload.
 const pageCamera = createCamera({
+  page: pageId, // the name its report carries, so zrb can ask this page and not the other one
   onState: ({ names, error }) => {
     statusEl.textContent = error || (names.length ? `camera: ${names.join(', ')}` : state);
     statusEl.classList.toggle('error', !!error);
@@ -169,12 +174,18 @@ if (!model || !await show(model)) {  // say so, even in the app, instead of show
 }
 addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
 // M is the microphone, and with it her voice out of the speaker: one gesture is what a browser asks
-// for before either, and speaking to her is also how you come to hear her answer.
+// for before either, and speaking to her is also how you come to hear her answer. Off turns off both:
+// a microphone that has stopped sending while her stream runs and her graph stays open is not off --
+// it is a page holding this device's audio session to play silence into.
 addEventListener('keydown', e => {
   if (e.key !== 'm' || e.repeat) return;
+  if (audio.listening) return audio.stop();
   audio.startEars();
-  audio.toggleMic();
+  audio.startMic();
 });
+// And both are let go when the page goes away, for the same reason: a graph and a request that only
+// the page can end do not end themselves.
+addEventListener('pagehide', () => audio.stop());
 // C is the camera: the same one gesture a browser asks for, so the names it was keeping private
 // become names zrb can ask for (`/photo phone-back`), and the status line says what they are.
 addEventListener('keydown', e => {
@@ -344,7 +355,7 @@ function onEvent({ data }) {
 function connect(name) {
   events?.close();
   let lost = false;
-  events = new EventSource(`events?model=${encodeURIComponent(name)}`);
+  events = new EventSource(`events?model=${encodeURIComponent(name)}&page=${encodeURIComponent(pageId)}`);
   events.onmessage = onEvent;
   events.onerror = () => { lost = true; statusEl.textContent = 'disconnected'; };
   events.onopen = () => { if (lost) location.reload(); };

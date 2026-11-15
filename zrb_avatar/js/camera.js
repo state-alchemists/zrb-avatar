@@ -18,7 +18,7 @@ const FRAME_MAX_PX = 1280; // longest side of the photo handed to zrb
 // say that one arrived.
 const FIRST_FRAME_MS = 250;
 
-export function createCamera({ onState } = {}) {
+export function createCamera({ onState, page = '' } = {}) {
   let names = [], error = '';
 
   const changed = () => onState?.({ names, error });
@@ -67,7 +67,9 @@ export function createCamera({ onState } = {}) {
   }
 
   // The names this page can offer zrb. Posted rather than kept here: the server is the one zrb
-  // asks, and a page that reloaded says its piece again on the way up.
+  // asks, and a page that reloaded says its piece again on the way up. The page goes with them,
+  // because a name is only one page's: two pages are normal now -- a laptop and a phone -- and zrb
+  // asks a photo of the page that named the camera rather than of every page in the room.
   async function publish() {
     const found = await videoInputs();
     names = found.map(nameOf);
@@ -76,7 +78,7 @@ export function createCamera({ onState } = {}) {
     // replace the names another page already gave: nothing is reported until a name is known.
     if (!found.some(device => device.label)) return names;
     try {
-      await fetch('frame/devices', {
+      await fetch(`frame/devices?page=${encodeURIComponent(page)}`, {
         method: 'POST',
         body: JSON.stringify({ devices: names }),
       });

@@ -1093,17 +1093,29 @@ face_client.AVATAR_URL = saved
 # not have, and the page answers with a JPEG -- or with the sentence saying why it could not, which
 # travels as the reason phrase, so /photo can say something the user can act on.
 JPEG = b"\xff\xd8\xff\xe0a phone's photo, near enough"
+# A name nobody has reported is asked of every page and waits out the ask, since the page with the
+# camera may not have reported it yet. That is the right wait and a slow test, so the ask is short
+# for this section -- the handler reads the module's constant, not a copy of it.
+saved_frame_seconds = server.FRAME_SECONDS
+server.FRAME_SECONDS = 2.0
 
 
-def photographer(answer):
-    """A page: reads the event stream and answers the first frame request with *answer*."""
+def photographer(answer, wait=0.0, name=''):
+    """A page: joins the event stream, then answers the first frame request with *answer*.
+
+    *wait* is how long the page takes to answer, which is how a test puts two pages in order. A
+    page that names itself says so on its stream, which is how the server knows which page has
+    which camera: two pages are normal now -- a laptop and a phone.
+    """
     page = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    page.request("GET", "/events")
+    page.request("GET", f"/events?page={name}" if name else "/events")
     events = page.getresponse()
     while True:
         line = events.readline().decode()
         if line.startswith("data: ") and '"frame"' in line:
             key = json.loads(line.removeprefix("data: "))["id"]
+            if wait:
+                time.sleep(wait)
             post = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             post.request("POST", f"/frame?id={key}", json.dumps(answer))
             assert post.getresponse().status == 204
@@ -1134,7 +1146,7 @@ refused.read()
 # on to the user.
 client.request("POST", "/frame?id=made-up", '{"image": "data:image/jpeg;base64,AAAA"}')
 assert client.getresponse().status == 404
-server._frames["waiting"] = {"done": threading.Event(), "image": b"", "refusal": ""}
+server._frames["waiting"] = {"done": threading.Event(), "image": b"", "refusals": []}
 try:
     for body, code in (
         ('{"image": "data:image/png;base64,AAAA"}', 400),
@@ -1144,25 +1156,71 @@ try:
     ):
         client.request("POST", "/frame?id=waiting", body)
         assert client.getresponse().status == code, body
-    assert server._frames["waiting"]["refusal"]  # a sentence, not an empty failure
+    assert server._frames["waiting"]["refusals"]  # a sentence, not an empty failure
     for length, code in (("nope", 400), ("-1", 400), (str(server.MAX_FRAME_BYTES + 1), 413)):
         assert post_raw("/frame?id=waiting", length) == code
 finally:
     server._frames.pop("waiting")
 assert server.take_frame("nothing", timeout=0.3) == (b"", "")  # no page answers: no photo
 
-# The names the page gives its cameras. A page labels a camera only once it has been allowed one, so
-# this is a report rather than a discovery, and the last report is the whole truth.
+# The names the pages give their cameras, by the page that gave them. A page labels a camera only
+# once it has been allowed one, so this is a report rather than a discovery, and the last report
+# from a page is the whole truth about that page.
 client.request(
-    "POST", "/frame/devices", json.dumps({"devices": ["back camera", "front camera", "  "]})
+    "POST",
+    "/frame/devices?page=phone",
+    json.dumps({"devices": ["back camera", "front camera", "  "]}),
 )
 assert client.getresponse().status == 204
 client.request("GET", "/frame/devices")
 assert json.loads(client.getresponse().read()) == {"devices": ["back camera", "front camera"]}
 assert server.page_cameras() == ["back camera", "front camera"]
+# A second page's names are its own: they are offered beside the phone's, and the laptop's report
+# neither erases nor stands in for the phone's.
+client.request(
+    "POST", "/frame/devices?page=laptop", json.dumps({"devices": ["FaceTime HD"]})
+)
+assert client.getresponse().status == 204
+assert server.page_cameras() == ["back camera", "front camera", "FaceTime HD"]
+client.request("POST", "/frame/devices?page=phone", json.dumps({"devices": []}))
+assert client.getresponse().status == 204
+assert server.page_cameras() == ["FaceTime HD"]  # the phone's grant went; the laptop still has one
 client.request("POST", "/frame/devices", json.dumps(["not", "a report"]))
 assert client.getresponse().status == 400  # a report that is not one changes nothing
-assert server.page_cameras() == ["back camera", "front camera"]
+assert server.page_cameras() == ["FaceTime HD"]
+
+# Two pages, one photo. The page without the camera answers first, and its refusal must not become
+# the answer: what ends the ask is a photo, or every page asked having said it cannot.
+threading.Thread(target=photographer, args=({"refusal": REFUSAL},), daemon=True).start()
+threading.Thread(
+    target=photographer,
+    args=({"image": "data:image/jpeg;base64," + base64.b64encode(JPEG).decode()}, 0.6),
+    daemon=True,
+).start()
+time.sleep(0.5)  # both pages are open before anything is asked
+client.request("GET", "/frame?device=back%20camera")
+photo = client.getresponse()
+assert photo.status == 200 and photo.read() == JPEG  # the photo, not the refusal that came first
+# And a name belongs to the page that reported it, so the other page is not asked at all: a laptop
+# with its own camera would answer at once, and it is not the camera that was asked for.
+LAPTOP_JPEG = b"\xff\xd8\xff\xe0the laptop's own camera, near enough"
+for page, devices in (("laptop", ["FaceTime HD"]), ("phone", ["back camera"])):
+    client.request(
+        "POST", f"/frame/devices?page={page}", json.dumps({"devices": devices})
+    )
+    assert client.getresponse().status == 204
+for name, image in (("laptop", LAPTOP_JPEG), ("phone", JPEG)):
+    threading.Thread(
+        target=photographer,
+        args=({"image": "data:image/jpeg;base64," + base64.b64encode(image).decode()},
+              0.1 if name == "laptop" else 0.5, name),
+        daemon=True,
+    ).start()
+time.sleep(0.5)
+client.request("GET", "/frame?device=back%20camera")
+photo = client.getresponse()
+assert photo.status == 200 and photo.read() == JPEG  # the phone's, though the laptop answered sooner
+server.FRAME_SECONDS = saved_frame_seconds  # the real deadline back, for anything after this
 
 # The watcher: a player's line becomes a music event, and the state is only sent when it changes.
 server.set_music(False)
@@ -2135,6 +2193,18 @@ try:
     assert body == b"\x00" * 640
 finally:
     server.audio.PING_SECONDS = saved_ping
+
+# The channel and its rate are one step, because the page configures itself from that header: a rate
+# read apart from the channel it describes is a sentence played at the wrong pitch. A sentence at
+# another rate rotates the channel, and the reader that asks next starts at the new rate rather than
+# naming the old one over the new blocks.
+old_channel, old_rate = server.audio.start_reading_outbound()
+assert old_rate == 22050, old_rate  # what the last sentence was made at
+server.audio.put_outbound(SAID, 24000)
+next_channel, next_rate = server.audio.start_reading_outbound()
+assert next_rate == 24000 and next_channel is not old_channel
+assert next_channel.take(1) == SAID  # carried over: the sentence made for the stream that asks
+assert old_channel.take(0.05) is None  # and the reader it replaced is left with nothing
 
 # And the server itself, on the port that is already open above: guarded now, unguarded again after.
 def guarded(path, headers=None):
