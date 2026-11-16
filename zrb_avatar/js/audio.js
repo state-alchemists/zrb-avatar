@@ -158,7 +158,9 @@ function samples(bytes, rest) {
 
 // A graph at `rate` where the browser has one, and at its own where it does not — the worklets carry
 // the difference as a step, so both play and record correctly. Resumed because a context made
-// without a gesture waits for ever; every caller here has one.
+// without a gesture waits for ever. The microphone's graph is made this way, after the browser has
+// said who may have one; the speaker's is not, because its graph has to exist inside the gesture
+// rather than after an await (see contextNow).
 async function contextAt(rate) {
   let context;
   try {
@@ -328,25 +330,45 @@ export function createAudio({ onState } = {}) {
     return listening || micStarting ? stopMic() : startMic();
   }
 
-  // The speaker's graph, made once: its rate is whatever the first sentence was made at, and a later
-  // sentence at another rate only moves the step it is read at, so a rate change is not a click. The
-  // stream itself ends when that happens (see hear) and is asked for again.
+  // The speaker's graph, made now rather than when the first sentence comes back. A browser gives a
+  // page one gesture to start a context in and leaves a context made after it suspended -- silently,
+  // with a resolved promise -- so this runs while the key event is still being handled, before the
+  // first await and before the first fetch. No `sampleRate` is asked for: a constructor that cannot
+  // honour a rate throws, and inside a keypress there is no second chance to make a graph, while the
+  // sentence's own rate is already the `step` the worklet reads its ring at (see PLAY and ears).
+  // A context the browser will not run is not a page that is listening, so it goes off and says so.
+  function contextNow() {
+    const context = new AudioContext();
+    context.resume().catch(e => {
+      if (!hearing) return; // already off: nothing to say about a graph nobody is using
+      stopEars();
+      failed(`speaker: ${e.message || 'did not start'}`);
+    });
+    return context;
+  }
+
+  // The speaker's node, made on that graph once the first sentence has said what rate it was made
+  // at: `step` is that rate against this graph's, so 22 kHz speech plays at 22 kHz on a 48 kHz graph
+  // -- the resampling happens in the worklet, which is why the graph is the browser's own and a
+  // second one is never made late. A later sentence at another rate only moves the step, so a rate
+  // change is not a click; the stream itself ends when one happens (see hear) and is asked for again.
   async function ears(rate) {
     if (earsNode) {
       earsNode.port.postMessage({ step: rate / earsContext.sampleRate });
       return earsNode;
     }
-    earsContext = await contextAt(rate);
-    await earsContext.audioWorklet.addModule((playUrl ??= workletUrl(PLAY)));
-    const node = new AudioWorkletNode(earsContext, 'zrb-play', {
+    const context = earsContext;
+    if (!context) return null; // stopped before the module was asked for: nothing to play into
+    await context.audioWorklet.addModule((playUrl ??= workletUrl(PLAY)));
+    const node = new AudioWorkletNode(context, 'zrb-play', {
       processorOptions: {
-        step: rate / earsContext.sampleRate,
-        target: Math.round(earsContext.sampleRate * TARGET),
-        most: Math.round(earsContext.sampleRate * LATE),
-        ring: Math.round(earsContext.sampleRate * RING),
+        step: rate / context.sampleRate,
+        target: Math.round(context.sampleRate * TARGET),
+        most: Math.round(context.sampleRate * LATE),
+        ring: Math.round(context.sampleRate * RING),
       },
     });
-    node.connect(earsContext.destination);
+    node.connect(context.destination);
     earsNode = node;
     return node;
   }
@@ -357,6 +379,7 @@ export function createAudio({ onState } = {}) {
     const rate = Number(res.headers.get('X-Sample-Rate'));
     if (!Number.isFinite(rate) || rate <= 0) throw new Error('no sample rate on the out stream');
     const node = await ears(rate);
+    if (!node) return; // the press was taken back while the worklet was loading: nothing to read into
     const reader = res.body.getReader();
     let rest = new Uint8Array(0);
     for (;;) {
@@ -389,10 +412,21 @@ export function createAudio({ onState } = {}) {
     }
   }
 
+  // On, inside the press that asked for it: the graph is made here, while the key event is still
+  // being handled, and only then is the stream asked for behind it. A rejection reaches the page's
+  // status line through `failed` -- the point of the whole arrangement is that a page which cannot
+  // play says so rather than sitting there reporting that it is listening.
   function startEars() {
     if (hearing) return;
+    let context;
+    try {
+      context = contextNow();
+    } catch (e) {
+      return failed(`speaker: ${e.message || 'did not start'}`); // no graph at all: said, not swallowed
+    }
     hearing = true;
     error = '';
+    earsContext = context;
     earsAbort = new AbortController();
     changed();
     // Not awaited: it reads until stopEars aborts it. Caught all the same, so a page whose own
