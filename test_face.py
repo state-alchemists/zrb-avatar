@@ -2159,6 +2159,17 @@ assert body == MIC
 assert headers["X-Sample-Rate"] == "16000"
 assert headers["X-Sample-Width"] == "2" and headers["X-Channels"] == "1"
 
+# The page sends it both ways, and the one that carried real speech was the second: a browser that
+# streams a body posts one request whose body is the microphone, and one that will not — no `duplex`,
+# or a request that never opens at all — posts the same blocks one at a time instead. Both are in the
+# page because the difference only shows in a browser: a real Chrome refused the streamed request
+# outright with an ALPN error, and the fallback carried the audio from there.
+audio_js = (server.HERE / "js" / "audio.js").read_text()
+open_post = audio_js[audio_js.index("function openPost()"):audio_js.index("function postEachBlock()")]
+assert "if (!streamsBody()) return postEachBlock();" in open_post
+assert "duplex: 'half'" in open_post and "postEachBlock()" in open_post  # a start that failed goes on
+assert ".catch(() => {})" not in open_post  # a dead upload is not a silence to swallow
+
 # And chunked, which is what a page streaming its microphone sends: no length to give.
 _, body = listen_once(
     "/audio/in",

@@ -199,42 +199,49 @@ export function createAudio({ onState } = {}) {
   // what arrived, so 'off' is a closed request rather than a stream of silence for somebody
   // downstream to notice.
   function openPost() {
+    if (!streamsBody()) return postEachBlock();
     let open = true;
-    if (streamsBody()) {
-      const body = new ReadableStream({
-        start(controller) {
-          // A request that went away under the microphone — a server that answered early, a
-          // connection that dropped — cannot be written to any more, and a block every tenth of a
-          // second at a closed door is a page full of errors. Off is the truth by then, so it is the
-          // microphone that stops.
-          postPcm = pcm => {
-            if (!open) return;
-            try {
-              controller.enqueue(pcm);
-            } catch {
-              open = false;
-              stopMic();
-              failed('microphone: the request closed');
-            }
-          };
-          endPost = () => {
-            if (!open) return;
+    const body = new ReadableStream({
+      start(controller) {
+        // A request that went away under the microphone — a server that answered early, a
+        // connection that dropped — cannot be written to any more, and a block every tenth of a
+        // second at a closed door is a page full of errors. Off is the truth by then, so it is the
+        // microphone that stops.
+        postPcm = pcm => {
+          if (!open) return;
+          try {
+            controller.enqueue(pcm);
+          } catch {
             open = false;
-            controller.close();
-          };
-        },
+            stopMic();
+            failed('microphone: the request closed');
+          }
+        };
+        endPost = () => {
+          if (!open) return;
+          open = false;
+          controller.close();
+        };
+      },
+    });
+    // Not awaited: it answers as the body ends, which is after the microphone is already off. A
+    // request that never opened at all is a different thing — a proxy in the way, or a browser that
+    // refuses a body it has no length for — and it is not a microphone to give up on, so the same
+    // audio goes a block at a time instead.
+    fetch('/audio', { method: 'POST', body, duplex: 'half', headers: HEADERS })
+      .then(res => { if (!res.ok) failed(`microphone refused: ${res.status}`); })
+      .catch(() => {
+        if (!open) return; // the ending, not the start
+        open = false;
+        if (listening) postEachBlock();
       });
-      // Not awaited: it answers as the body ends, which is after the microphone is already off. A
-      // failure here is a server that went away mid-request, and stopping is all there is to do.
-      fetch('/audio', { method: 'POST', body, duplex: 'half', headers: HEADERS })
-        .then(res => { if (!res.ok) failed(`microphone refused: ${res.status}`); })
-        .catch(() => {});
-      return;
-    }
-    // No duplex: a body with no length cannot be streamed, so the same audio goes a block at a time,
-    // one after another because the order is the audio. A block that cannot leave while two others
-    // are on their way is audio from before now and is dropped.
-    let sent = 0, chain = Promise.resolve();
+  }
+
+  // A block at a time, one after another because the order is the audio. A block that cannot leave
+  // while two others are on their way is audio from before now and is dropped. This is the fallback
+  // for a browser that will not stream a body, and what a stream that failed to open falls back to.
+  function postEachBlock() {
+    let open = true, sent = 0, chain = Promise.resolve();
     postPcm = pcm => {
       if (!open || sent >= AHEAD) return;
       sent++;
