@@ -115,7 +115,7 @@ registerProcessor('zrb-play', Play);
 // What POST /audio takes (audio.py's INBOUND_RATE), and refuses with a 415 otherwise: audio at
 // another rate is noise to every speech-to-text backend, so there is nothing here to negotiate.
 const RATE = 16000;
-// Seconds of the microphone per message. The server's queue holds two blocks and drops the oldest,
+// Seconds of the microphone per message. The server's queue holds two seconds and drops the oldest,
 // so long blocks buy a reader slack and short ones buy dictation latency; a tenth of a second is
 // what the fallback posts, and a fair size to stream in too.
 const BLOCK = 0.1;
@@ -179,6 +179,10 @@ export function createAudio({ onState } = {}) {
   // so a block can never be captured into a request that has stopped.
   let postPcm = null, endPost = null;
   let micStream = null, micContext = null, micNode = null;
+  // A start that is on its way, and which one is newest. Two presses of `m` inside one getUserMedia
+  // would otherwise both open a graph, and the second would overwrite the first's fields -- so
+  // stopping released one microphone and the other went on capturing.
+  let micStarting = false, micGeneration = 0;
   let earsContext = null, earsNode = null, earsAbort = null;
 
   const changed = () => onState?.({ mic: listening, ears: hearing, error });
@@ -256,44 +260,65 @@ export function createAudio({ onState } = {}) {
   }
 
   async function startMic() {
-    if (listening) return;
+    if (listening || micStarting) return;
     // Not a refusal by the user but by the page's origin, and it says so in its own words: a phone on
     // plain http is the usual case, and "cannot read properties of undefined" is not an answer.
     if (!navigator.mediaDevices?.getUserMedia) return failed('microphone: needs https on anything but this machine');
     error = '';
+    const generation = ++micGeneration;
+    micStarting = true;
+    // What this start opened, closed by this start alone: the fields above may by then hold a later
+    // press's microphone, and stopping that one is not cleanup.
+    let stream = null, context = null;
+    const release = () => {
+      stream?.getTracks().forEach(track => track.stop());
+      context?.close().catch(() => {});
+    };
+    const superseded = () => generation !== micGeneration;
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, channelCount: 1, sampleRate: RATE } });
-      micContext = await contextAt(RATE);
-      await micContext.audioWorklet.addModule((captureUrl ??= workletUrl(CAPTURE)));
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, channelCount: 1, sampleRate: RATE } });
+      if (superseded()) return release(); // a press took over while the browser was asking
+      context = await contextAt(RATE);
+      if (superseded()) return release();
+      await context.audioWorklet.addModule((captureUrl ??= workletUrl(CAPTURE)));
+      if (superseded()) return release();
       // Before the graph runs: the blocks it starts sending need somewhere to go.
       openPost();
-      const node = new AudioWorkletNode(micContext, 'zrb-capture', {
-        processorOptions: { step: micContext.sampleRate / RATE, block: Math.round(RATE * BLOCK) },
+      const node = new AudioWorkletNode(context, 'zrb-capture', {
+        processorOptions: { step: context.sampleRate / RATE, block: Math.round(RATE * BLOCK) },
       });
-      const mute = micContext.createGain();
+      const mute = context.createGain();
       mute.gain.value = 0; // the microphone is not played out loud here; the node needs a sink to be pulled
       node.port.onmessage = ({ data }) => postPcm?.(data);
-      micContext.createMediaStreamSource(micStream).connect(node);
-      node.connect(mute).connect(micContext.destination);
+      context.createMediaStreamSource(stream).connect(node);
+      node.connect(mute).connect(context.destination);
+      micStream = stream;
+      micContext = context;
       micNode = node;
       listening = true;
     } catch (e) {
       failed(`microphone: ${e.message || 'did not start'}`);
-      releaseMic(); // part of it may have opened before the refusal
+      release(); // part of it may have opened before the refusal
+      if (!superseded()) releaseMic(); // and the request with it, unless a later press owns that now
+    } finally {
+      if (!superseded()) micStarting = false;
+      changed();
     }
-    changed();
   }
 
-  // Ending the request, not muting it: nothing is captured after this returns.
+  // Ending the request, not muting it: nothing is captured after this returns. A start still on its
+  // way is cancelled rather than raced -- it stops whatever it opened when it notices it is stale.
   function stopMic() {
-    if (!listening) return;
+    if (!listening && !micStarting) return;
+    micGeneration++;
+    micStarting = false;
     listening = false;
     releaseMic();
     changed();
   }
 
   function toggleMic() {
-    return listening ? stopMic() : startMic();
+    return listening || micStarting ? stopMic() : startMic();
   }
 
   // The speaker's graph, made once: its rate is whatever the first sentence was made at, and a later
