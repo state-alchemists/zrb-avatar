@@ -12,6 +12,8 @@ import { createView } from './view.js';
 import { createBlush } from './blush.js';
 import { createPose } from './pose.js';
 import { createDesktop } from './desktop.js';
+import { createAudio } from './audio.js';
+import { createCamera } from './camera.js';
 
 // state -> glow colour
 const LOOK = { idle: '#33ccff88', thinking: '#a6f', tool: '#3f9', attention: '#f46', permission: '#f22', speaking: '#6ef' };
@@ -59,6 +61,10 @@ let events = null; // the server's, see connect()
 // happened to arrive last, and `run` says a reloaded page outranks everything the last one said.
 const viewRun = Math.random().toString(36).slice(2);
 let viewSeq = 0;
+// This page's own name, which is the run above: a reload is a new page with a new run, and the
+// server keeps each page's camera names by it, so a photo is asked of the page that has the camera
+// rather than of every page in the room.
+const pageId = viewRun;
 const followState = () => her?.motion.want(state === 'idle' && music && autonomy.dance ? 'dance' : state);
 function setState(value) {
   if (value === 'idle' && (state === 'thinking' || state === 'tool')) her?.expression.smileSoon(); // done: a smile
@@ -67,6 +73,37 @@ function setState(value) {
   statusEl.textContent = state;
   followState();
 }
+
+// Her ears and mouth on this page: a microphone zrb hears, and a speaker her voice comes out of. Kept
+// outside `her` because the audio outlives any one model and has to survive the swap, and opened by
+// nothing on load — a browser refuses a microphone and a sound before a gesture, and a refusal reads
+// as a broken page rather than as a browser doing its job. The key below is the gesture.
+const micKey = document.getElementById('mic'); // the hint's own `m`, which says what it will do next
+const audio = createAudio({
+  // Said on the status line, where a model that will not load says its piece: a microphone the
+  // browser refused has to look like a refusal, not like a switch that does nothing. And the key in
+  // the hint changes with it — `m talk and listen`, then `m stop` — because a press that leaves
+  // nothing looking different is a page that seems not to have heard the press.
+  onState: ({ mic, error }) => {
+    statusEl.textContent = error || state;
+    statusEl.classList.toggle('error', !!error);
+    if (micKey) micKey.textContent = error ? 'refused' : mic ? 'stop' : 'talk and listen';
+  },
+});
+window.audio = audio; // for a transcript page and for devtools, as window.face is
+
+// The camera in this page, which is the phone's: zrb asks for one photo at a time (see camera.js).
+// The names are published on the way up, without asking anything, so a page allowed a camera in an
+// earlier visit is a camera zrb can name again after a reload.
+const pageCamera = createCamera({
+  page: pageId, // the name its report carries, so zrb can ask this page and not the other one
+  onState: ({ names, error }) => {
+    statusEl.textContent = error || (names.length ? `camera: ${names.join(', ')}` : state);
+    statusEl.classList.toggle('error', !!error);
+  },
+});
+pageCamera.publish();
+window.pageCamera = pageCamera;
 
 // Loads <name>.vrm and puts her on screen, in place of whoever was there. Null if it can't be
 // loaded (the one on screen stays); a newer show() wins over an older one still loading, which
@@ -140,6 +177,25 @@ if (!model || !await show(model)) {  // say so, even in the app, instead of show
   throw new Error(statusEl.textContent);
 }
 addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
+// M is the microphone, and with it her voice out of the speaker: one gesture is what a browser asks
+// for before either, and speaking to her is also how you come to hear her answer. Off turns off both:
+// a microphone that has stopped sending while her stream runs and her graph stays open is not off --
+// it is a page holding this device's audio session to play silence into.
+addEventListener('keydown', e => {
+  if (e.key !== 'm' || e.repeat) return;
+  if (audio.listening) return audio.stop();
+  audio.startEars();
+  audio.startMic();
+});
+// And both are let go when the page goes away, for the same reason: a graph and a request that only
+// the page can end do not end themselves.
+addEventListener('pagehide', () => audio.stop());
+// C is the camera: the same one gesture a browser asks for, so the names it was keeping private
+// become names zrb can ask for (`/photo phone-back`), and the status line says what they are.
+addEventListener('keydown', e => {
+  if (e.key !== 'c' || e.repeat) return;
+  pageCamera.ask();
+});
 addEventListener('wheel', e => { e.preventDefault(); her.framing.onWheel(e); her.view.notice(); }, { passive: false }); // not the page's own zoom
 
 // What the user sees right now, for zrb's AvatarLook and `zrb-avatar snapshot`: this frame, from this
@@ -282,6 +338,10 @@ function onEvent({ data }) {
     followState();
   } else if (msg.type === 'snapshot') {
     snapshot(msg.id);
+  } else if (msg.type === 'frame') {
+    // One photo from this page's camera, by the name zrb asked for: the phone in your hand, on its
+    // way to /photo. Answered by id, so a refusal reaches the ask that wanted it.
+    pageCamera.answer(msg.id, msg.device);
   } else if (msg.type === 'autonomy') {
     // What she agreed to. Applied at once: a switch she just turned off should not wait for the
     // next clip, or for the reply that follows this one.
@@ -299,7 +359,7 @@ function onEvent({ data }) {
 function connect(name) {
   events?.close();
   let lost = false;
-  events = new EventSource(`events?model=${encodeURIComponent(name)}`);
+  events = new EventSource(`events?model=${encodeURIComponent(name)}&page=${encodeURIComponent(pageId)}`);
   events.onmessage = onEvent;
   events.onerror = () => { lost = true; statusEl.textContent = 'disconnected'; };
   events.onopen = () => { if (lost) location.reload(); };

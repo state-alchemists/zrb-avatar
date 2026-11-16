@@ -1089,6 +1089,206 @@ face_client.AVATAR_URL, saved = "http://127.0.0.1:9/event", face_client.AVATAR_U
 assert face_client.snapshot(timeout=1) is None  # no server: no picture, no exception
 face_client.AVATAR_URL = saved
 
+# zrb's remote camera: GET /frame asks the open page for one photo from a camera this machine does
+# not have, and the page answers with a JPEG -- or with the sentence saying why it could not, which
+# travels as the reason phrase, so /photo can say something the user can act on.
+JPEG = b"\xff\xd8\xff\xe0a phone's photo, near enough"
+# A name nobody has reported is asked of every page and waits out the ask, since the page with the
+# camera may not have reported it yet. That is the right wait and a slow test, so the ask is short
+# for this section -- the handler reads the module's constant, not a copy of it.
+saved_frame_seconds = server.FRAME_SECONDS
+server.FRAME_SECONDS = 2.0
+
+
+def photographer(answer, wait=0.0, name=''):
+    """A page: joins the event stream, then answers the first frame request with *answer*.
+
+    *wait* is how long the page takes to answer, which is how a test puts two pages in order. A
+    page that names itself says so on its stream, which is how the server knows which page has
+    which camera: two pages are normal now -- a laptop and a phone.
+    """
+    page = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    page.request("GET", f"/events?page={name}" if name else "/events")
+    events = page.getresponse()
+    while True:
+        line = events.readline().decode()
+        if line.startswith("data: ") and '"frame"' in line:
+            key = json.loads(line.removeprefix("data: "))["id"]
+            if wait:
+                time.sleep(wait)
+            post = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            post.request("POST", f"/frame?id={key}", json.dumps(answer))
+            assert post.getresponse().status == 204
+            return
+
+
+threading.Thread(
+    target=photographer,
+    args=({"image": "data:image/jpeg;base64," + base64.b64encode(JPEG).decode()},),
+    daemon=True,
+).start()
+time.sleep(0.3)  # let it connect
+client.request("GET", "/frame?device=phone-back")
+photo = client.getresponse()
+assert photo.status == 200 and photo.getheader("Content-Type") == "image/jpeg"
+assert photo.read() == JPEG
+# A page that cannot use its camera says why: the refusal is a status, and the sentence is the
+# reason zrb repeats rather than a photo that is simply missing.
+REFUSAL = "the page was not allowed to use its camera"
+threading.Thread(target=photographer, args=({"refusal": REFUSAL},), daemon=True).start()
+time.sleep(0.3)
+client.request("GET", "/frame?device=phone-back")
+refused = client.getresponse()
+assert refused.status == 503 and REFUSAL in refused.reason
+refused.read()
+# An id nobody asked for is refused; so is a body that is not a JPEG; and a page with neither a
+# photo nor a reason still says something, since a failure with no words is the one zrb cannot pass
+# on to the user.
+client.request("POST", "/frame?id=made-up", '{"image": "data:image/jpeg;base64,AAAA"}')
+assert client.getresponse().status == 404
+server._frames["waiting"] = {"done": threading.Event(), "image": b"", "refusals": []}
+try:
+    for body, code in (
+        ('{"image": "data:image/png;base64,AAAA"}', 400),
+        ("not json", 400),
+        ("[]", 400),
+        ("{}", 204),
+    ):
+        client.request("POST", "/frame?id=waiting", body)
+        assert client.getresponse().status == code, body
+    assert server._frames["waiting"]["refusals"]  # a sentence, not an empty failure
+    for length, code in (("nope", 400), ("-1", 400), (str(server.MAX_FRAME_BYTES + 1), 413)):
+        assert post_raw("/frame?id=waiting", length) == code
+finally:
+    server._frames.pop("waiting")
+assert server.take_frame("nothing", timeout=0.3) == (b"", "")  # no page answers: no photo
+
+# The names the pages give their cameras, by the page that gave them. A page labels a camera only
+# once it has been allowed one, so this is a report rather than a discovery, and the last report
+# from a page is the whole truth about that page.
+client.request(
+    "POST",
+    "/frame/devices?page=phone",
+    json.dumps({"devices": ["back camera", "front camera", "  "]}),
+)
+assert client.getresponse().status == 204
+client.request("GET", "/frame/devices")
+assert json.loads(client.getresponse().read()) == {"devices": ["back camera", "front camera"]}
+assert server.page_cameras() == ["back camera", "front camera"]
+# A second page's names are its own: they are offered beside the phone's, and the laptop's report
+# neither erases nor stands in for the phone's.
+client.request(
+    "POST", "/frame/devices?page=laptop", json.dumps({"devices": ["FaceTime HD"]})
+)
+assert client.getresponse().status == 204
+assert server.page_cameras() == ["back camera", "front camera", "FaceTime HD"]
+client.request("POST", "/frame/devices?page=phone", json.dumps({"devices": []}))
+assert client.getresponse().status == 204
+assert server.page_cameras() == ["FaceTime HD"]  # the phone's grant went; the laptop still has one
+client.request("POST", "/frame/devices", json.dumps(["not", "a report"]))
+assert client.getresponse().status == 400  # a report that is not one changes nothing
+assert server.page_cameras() == ["FaceTime HD"]
+
+# Two pages, one photo. The page without the camera answers first, and its refusal must not become
+# the answer: what ends the ask is a photo, or every page asked having said it cannot.
+threading.Thread(target=photographer, args=({"refusal": REFUSAL},), daemon=True).start()
+threading.Thread(
+    target=photographer,
+    args=({"image": "data:image/jpeg;base64," + base64.b64encode(JPEG).decode()}, 0.6),
+    daemon=True,
+).start()
+time.sleep(0.5)  # both pages are open before anything is asked
+client.request("GET", "/frame?device=back%20camera")
+photo = client.getresponse()
+assert photo.status == 200 and photo.read() == JPEG  # the photo, not the refusal that came first
+# And a name belongs to the page that reported it, so the other page is not asked at all: a laptop
+# with its own camera would answer at once, and it is not the camera that was asked for.
+LAPTOP_JPEG = b"\xff\xd8\xff\xe0the laptop's own camera, near enough"
+for page, devices in (("laptop", ["FaceTime HD"]), ("phone", ["back camera"])):
+    client.request(
+        "POST", f"/frame/devices?page={page}", json.dumps({"devices": devices})
+    )
+    assert client.getresponse().status == 204
+for name, image in (("laptop", LAPTOP_JPEG), ("phone", JPEG)):
+    threading.Thread(
+        target=photographer,
+        args=({"image": "data:image/jpeg;base64," + base64.b64encode(image).decode()},
+              0.1 if name == "laptop" else 0.5, name),
+        daemon=True,
+    ).start()
+time.sleep(0.5)
+client.request("GET", "/frame?device=back%20camera")
+photo = client.getresponse()
+assert photo.status == 200 and photo.read() == JPEG  # the phone's, though the laptop answered sooner
+
+# A label two pages report is nobody's camera, and the list says so: it is offered once per page,
+# qualified, and asked for bare it is refused before any page is asked at all -- the first photo to
+# arrive would be the right answer only half the time. Every other name stays exactly as it was,
+# because a name in zrb's completion is one somebody has already learned and typed.
+SHARED = "shared cam"
+for page, devices in (
+    ("phone", ["back camera", SHARED]),
+    ("laptop", ["FaceTime HD", SHARED]),
+):
+    client.request(
+        "POST", f"/frame/devices?page={page}", json.dumps({"devices": devices})
+    )
+    assert client.getresponse().status == 204
+assert sorted(server.page_cameras()) == sorted(
+    ["back camera", "FaceTime HD", f"{SHARED} (phone)", f"{SHARED} (laptop)"]
+), server.page_cameras()
+assert SHARED not in server.page_cameras()  # the bare name is offered for neither page alone
+
+
+def ask_frame(name: str) -> tuple[int, str, bytes]:
+    """One GET /frame for a camera, by the name zrb would ask with: status, reason, body."""
+    client.request("GET", "/frame?device=" + name.replace(" ", "%20"))
+    answer = client.getresponse()
+    return answer.status, answer.reason, answer.read()
+
+
+status, sentence, _ = ask_frame(SHARED)
+assert status == 503, (status, sentence)  # refused, not taken from whichever page answered first
+assert "phone" in sentence and "laptop" in sentence, sentence
+assert f"{SHARED} (phone)" in sentence and f"{SHARED} (laptop)" in sentence, sentence
+# And the qualified name is a name that picks a page: the laptop answers at once with its own
+# camera, and the photo that comes back is still the phone's.
+for name, image, wait in (("laptop", LAPTOP_JPEG, 0.1), ("phone", JPEG, 0.5)):
+    threading.Thread(
+        target=photographer,
+        args=(
+            {"image": "data:image/jpeg;base64," + base64.b64encode(image).decode()},
+            wait,
+            name,
+        ),
+        daemon=True,
+    ).start()
+time.sleep(0.5)
+status, _, body = ask_frame(f"{SHARED} (phone)")
+assert status == 200 and body == JPEG  # the phone's, though the laptop answered sooner
+server.FRAME_SECONDS = saved_frame_seconds  # the real deadline back, for anything after this
+
+# A page's cameras go with the page. A report kept for a page that has gone would grow by one set of
+# names per reload, and `/frame/devices` would keep offering cameras from tabs that are closed.
+leaving = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+leaving.request("GET", "/events?page=a-page-that-leaves")
+leaving.getresponse()
+time.sleep(0.2)
+client.request(
+    "POST",
+    "/frame/devices?page=a-page-that-leaves",
+    json.dumps({"devices": ["a camera that left"]}),
+)
+assert client.getresponse().status == 204
+assert "a camera that left" in server.page_cameras()
+leaving.close()  # gone without saying anything, which is how a closed tab goes
+# The server finds a page that has gone by writing to it, so it has to be written to twice: the
+# first write goes out unanswered and the second meets the reset.
+for _ in range(3):
+    server.broadcast(json.dumps({"type": "state", "value": "idle"}))
+    time.sleep(0.15)
+assert "a camera that left" not in server.page_cameras()
+
 # The watcher: a player's line becomes a music event, and the state is only sent when it changes.
 server.set_music(False)
 server.watch_music(
@@ -1239,6 +1439,16 @@ states = re.findall(r"(\w+)\s*:", re.search(r"const LOOK = \{(.*?)\}", page).gro
 for state in [*states, "dance", "actions"]:
     have = server.anims()
     assert any(have.get(state, {}) or have.get("idle", {})), f"no clip for the {state} pool"
+
+# Every key the page listens for is a key the page says it listens for. Nothing starts on load — a
+# browser refuses a microphone and a sound before a gesture — so a key nobody was told about is a
+# feature nobody finds, and a key pressed into an unfocused window reads as a broken page: the hint
+# says that too, in the first line. Read as UTF-8, both of them: the page's arrows are not characters
+# Windows' own encoding has.
+page_html = (server.HERE / "face.html").read_text(encoding="utf-8")
+for key in re.findall(r"e\.key !== '([^']+)'", page):
+    assert f"<b>{key}</b>" in page_html, f"the page handles {key!r} and never says so"
+assert "click the page" in page_html
 
 # Every name AvatarPose (zrb_init.py) offers is one the page (js/pose.js) knows.
 tools = (server.HERE / "zrb_init.py").read_text()
@@ -1946,6 +2156,180 @@ for host, token in (("0.0.0.0", ""), ("0.0.0.0", "too-short")):
         else:
             raise AssertionError(f"exposed without a usable token: {host} {token!r}")
 auth.refuse_insecure_bind("0.0.0.0", TOKEN, "ZRB_AVATAR_TOKEN")  # guarded: allowed
+
+# The page's ears and mouth: raw 16-bit mono PCM one way, her voice back at whatever rate the
+# backend made it. One format is taken going in — a page that resamples to anything else is refused
+# rather than transcribed as noise — and the outbound rate travels in a header, since raw PCM has
+# nowhere in the body to put it.
+MIC = bytes(range(256)) * 8  # 2048 bytes: 64 ms of 16 kHz mono, quiet enough to hear nothing
+SAID = b"\x01\x02" * 1200  # 2400 bytes at 24 kHz: what speech made, at its own rate
+
+
+def post_audio(path: str, body, headers: dict, chunked: bool = False) -> int:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    payload = [body] if chunked else body  # an iterable is framed as one chunk
+    connection.request(
+        "POST", path, body=payload, headers=headers, encode_chunked=chunked
+    )
+    response = connection.getresponse()
+    response.read()
+    connection.close()
+    return response.status
+
+
+def listen_once(path: str, size: int, send) -> tuple[dict, bytes]:
+    """Attach a reader, put audio through it, and read *size* bytes.
+
+    The live order in both directions: a page opens its stream and is reading before anything is
+    said, and zrb is reading the microphone while the page talks. Attaching first is also what makes
+    this reader the one of its direction — a reader that has gone is replaced by the next, rather
+    than left holding the audio that arrives.
+    """
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    connection.request("GET", path)
+    response = connection.getresponse()
+    time.sleep(0.15)  # registered as the reader, before there is anything to read
+    send()
+    try:
+        return dict(response.getheaders()), response.read(size)
+    finally:
+        connection.close()
+
+
+# A measured body first: the fallback for a browser that will not stream.
+headers, body = listen_once(
+    "/audio/in",
+    len(MIC),
+    lambda: post_audio("/audio", MIC, {"X-Sample-Rate": "16000"}),
+)
+assert body == MIC
+assert headers["X-Sample-Rate"] == "16000"
+assert headers["X-Sample-Width"] == "2" and headers["X-Channels"] == "1"
+
+# The page sends it both ways, and the one that carried real speech was the second: a browser that
+# streams a body posts one request whose body is the microphone, and one that will not — no `duplex`,
+# or a request that never opens at all — posts the same blocks one at a time instead. Both are in the
+# page because the difference only shows in a browser: a real Chrome refused the streamed request
+# outright with an ALPN error, and the fallback carried the audio from there.
+audio_js = (server.HERE / "js" / "audio.js").read_text(encoding="utf-8")
+open_post = audio_js[audio_js.index("function openPost()"):audio_js.index("function postEachBlock()")]
+assert "if (!streamsBody()) return postEachBlock();" in open_post
+assert "duplex: 'half'" in open_post and "postEachBlock()" in open_post  # a start that failed goes on
+assert ".catch(() => {})" not in open_post  # a dead upload is not a silence to swallow
+
+# And chunked, which is what a page streaming its microphone sends: no length to give.
+_, body = listen_once(
+    "/audio/in",
+    len(MIC),
+    lambda: post_audio("/audio", MIC, {"X-Sample-Rate": "16000"}, chunked=True),
+)
+assert body == MIC
+
+# One reader per direction: a page that reloaded attaches, and the reader it replaced must not be
+# left holding what arrives next — it would write it into a socket nobody is reading.
+abandoned = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+abandoned.request("GET", "/audio/in")
+abandoned.getresponse()
+time.sleep(0.2)
+_, body = listen_once(
+    "/audio/in",
+    len(MIC),
+    lambda: post_audio("/audio", MIC, {"X-Sample-Rate": "16000"}),
+)
+assert body == MIC  # the reader that is attached now, not the one that was left
+abandoned.close()
+
+# Refused, not resampled: speech-to-text takes one rate, and a page that sends another is a page to
+# fix rather than audio to guess at.
+assert post_audio("/audio", MIC, {"X-Sample-Rate": "44100"}) == 415
+assert post_audio("/audio", MIC, {"X-Channels": "2"}) == 415
+
+# Her voice, at the rate she was made at: the page configures its AudioContext from the header.
+headers, body = listen_once(
+    "/audio/out",
+    len(SAID),
+    lambda: post_audio("/say", SAID, {"X-Sample-Rate": "24000"}),
+)
+assert body == SAID and headers["X-Sample-Rate"] == "24000"
+assert post_audio("/say", SAID, {"X-Sample-Rate": "0"}) == 415  # no rate a voice can have
+
+saved_ping = server.audio.PING_SECONDS
+server.audio.PING_SECONDS = 0.05  # so a stream that ends is noticed inside this test
+try:
+    # A sentence at another rate opens a new stream: the one that is open ends rather than playing
+    # it at the old pitch, and what was made is carried to the reader that asks next.
+    old = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    old.request("GET", "/audio/out")
+    old_response = old.getresponse()
+    time.sleep(0.15)
+    assert post_audio("/say", SAID, {"X-Sample-Rate": "22050"}) == 204
+    # To the end of that stream: nothing but the silence it pings with, and then EOF rather than one
+    # sentence played at the other rate's pitch.
+    ended = old_response.read()
+    assert ended.strip(b"\x00") == b"" and len(ended) % 960 == 0  # 20 ms at 24 kHz
+    old.close()
+    fresh = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    fresh.request("GET", "/audio/out")
+    fresh_response = fresh.getresponse()
+    assert dict(fresh_response.getheaders())["X-Sample-Rate"] == "22050"
+    assert fresh_response.read(len(SAID)) == SAID
+    fresh.close()
+
+    # A quiet queue is answered with silence rather than with nothing: raw PCM has no comment
+    # syntax, so one inaudible frame is also the only write that notices a page whose tab has gone.
+    _, body = listen_once("/audio/in", 640, lambda: None)  # 20 ms of 16 kHz mono
+    assert body == b"\x00" * 640
+finally:
+    server.audio.PING_SECONDS = saved_ping
+
+# The channel and its rate are one step, because the page configures itself from that header: a rate
+# read apart from the channel it describes is a sentence played at the wrong pitch. A sentence at
+# another rate rotates the channel, and the reader that asks next starts at the new rate rather than
+# naming the old one over the new blocks.
+old_channel, old_rate = server.audio.start_reading_outbound()
+assert old_rate == 22050, old_rate  # what the last sentence was made at
+server.audio.put_outbound(SAID, 24000)
+next_channel, next_rate = server.audio.start_reading_outbound()
+assert next_rate == 24000 and next_channel is not old_channel
+assert next_channel.take(1) == SAID  # carried over: the sentence made for the stream that asks
+assert old_channel.take(0.05) is None  # and the reader it replaced is left with nothing
+
+# The cap is a length of audio, not a number of blocks: the page sends a tenth of a second at a time,
+# and a count of blocks held a fifth of a second rather than the two seconds it promises -- so a
+# reader that lagged by 300 ms lost the words in the middle. Twenty of the page's blocks fit, and the
+# oldest goes when the next one arrives.
+block = b"\x00" * 3200  # 100 ms of 16 kHz mono 16-bit
+channel = server.audio.Channel()
+for _ in range(25):
+    channel.put(block)
+assert len(channel.drain()) == 20
+# A block bigger than the whole cap is not cut for being long -- it is a sentence somebody made --
+# so it is kept while it is alone, and leaves only when newer audio arrives behind it.
+channel = server.audio.Channel()
+channel.put(b"\x00" * 200_000)  # past two seconds of this format, handed over at once
+assert len(channel.drain()) == 1
+channel.put(b"\x00" * 200_000)
+channel.put(block)
+assert channel.drain() == [block]
+
+# And the reader is told the moment its stream is replaced, rather than at the end of its own read
+# timeout: the page asks again as soon as this response ends, so fifteen seconds of waiting here is
+# fifteen seconds of silence in the middle of a conversation.
+saved_ping = server.audio.PING_SECONDS
+server.audio.PING_SECONDS = 15.0  # the read that a replaced stream must not have to wait out
+try:
+    stale = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+    stale.request("GET", "/audio/out")
+    stale_response = stale.getresponse()
+    time.sleep(0.15)  # the stream is the reader before anything is said
+    started = time.monotonic()
+    assert post_audio("/say", SAID, {"X-Sample-Rate": "16000"}) == 204
+    ended = stale_response.read()  # to the end of the response, which the rate change ends
+    assert time.monotonic() - started < 1.0  # ended because it was replaced, not by a timeout
+    assert ended.strip(b"\x00") == b""  # and nothing of the new sentence at the old pitch
+    stale.close()
+finally:
+    server.audio.PING_SECONDS = saved_ping
 
 # And the server itself, on the port that is already open above: guarded now, unguarded again after.
 def guarded(path, headers=None):

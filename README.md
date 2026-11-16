@@ -395,12 +395,16 @@ do not commit or share them.
 ### Using it
 
 - **Move**: drag her. **Close**: Alt+F4 on Windows, Cmd+Q on macOS.
-- **Camera**: click the window, then use the keys below. The angle is remembered.
+- **Keys**: click the window first, then press — a browser gives no microphone and makes no sound
+  until the page has been touched, and a key pressed into a window that never had focus is not
+  heard at all. The page lists these keys along its bottom edge. The camera's angle is remembered.
 - **Clicks** go through the see-through window to whatever is behind it, except on her (Windows and
   macOS). Linux cannot pass the mouse through, so the whole window takes clicks there.
 
 | Key | What it does |
 | --- | --- |
+| `m` | Microphone and speaker at once: zrb hears this device, and her voice comes out of it. Again turns both off. |
+| `c` | Allow this page's camera, so zrb can ask for a photo by name (`/photo phone-back`, `zrb-avatar frame`). |
 | ← → | Orbit around her. |
 | ↑ ↓ | Orbit over her head or under her feet, all the way round. |
 | Shift+↑ / Shift+↓ | Move the camera's focus up or down her body (to her face, say). |
@@ -523,6 +527,54 @@ hooks, the `zrb-avatar` commands, the window this package opens — reads the sa
 one shorter than sixteen characters. There is deliberately no flag that overrides that, for the
 reason zrb's own web bind has none: an override is the thing somebody reaches for once, on a laptop,
 and then forgets.
+
+### The phone's microphone, speaker and camera
+
+A page on the phone can be zrb's ears, its mouth, and one of its cameras: set
+`ZRB_LLM_VOICE_REMOTE_URL` to the page's URL and zrb's dictation, its speech player and its camera
+ask the page instead of this machine's own devices. With the camera left at `auto`, a name the page
+lists is taken from the page, and the machine's own cameras stay candidates for anything else.
+
+The page opens nothing by itself; a browser wants a gesture, and a prompt with nothing behind it
+reads as a broken page:
+
+- `m` gives it the microphone and starts her voice out of the phone's speaker; `m` again takes both
+  back, so a page with the microphone off is not still asking for silence to play.
+- `c` gives it the camera. A browser hides a phone's camera names until a page has been allowed
+  one, so this is also how `/photo` comes to have a name to ask for; the status line says what it
+  found, and after that `/photo back camera` is enough. The camera opens for one photo and closes
+  again — a phone in a pocket is not filming — and a page that cannot take one says why, which is
+  the sentence zrb repeats under `/photo`.
+
+Two pages can be open at once — the laptop and the phone — and each one keeps its own camera names:
+a photo is asked of the page that named the camera, and a page that answers "I have no such camera"
+cannot become the answer while the page that does have one is still taking the photo. When both
+pages report the same name — two tabs on one phone, or two machines with the same webcam — the name
+is offered once per page as `back camera (<page>)` and asking for it bare is refused, saying which
+pages claim it: a name two machines answer to would otherwise be a photo from whichever answered
+first. A name only one page reports is offered exactly as it was.
+
+### Which half lives where
+
+This repository is the page and the routes it speaks: `zrb_avatar/server.py:1299` hands `/audio/in`
+to zrb's dictation, `server.py:1448` takes `/say` from its speech player, and `server.py:1315` and
+`server.py:1317` answer `/frame` and `/frame/devices` for a camera on the page. The browser end of
+those is `zrb_avatar/js/audio.js` and `zrb_avatar/js/camera.js`.
+
+Honouring `ZRB_LLM_VOICE_REMOTE_URL` is zrb's, and nothing here repeats that decision. zrb reads it
+at `src/zrb/llm/util/face_server.py:46`, and three places act on it:
+
+- `src/zrb/llm/dictation/microphone.py:127` — `open_microphone` returns the page's microphone before
+  any stream of this machine's is opened.
+- `src/zrb/llm/speech/pcm_player.py:578` — the player's output stream is the page's speaker, so the
+  PCM a speech backend renders is posted to `/say`. Which stream to open is the player's, and a
+  speech backend here returns its audio and nothing else.
+- `src/zrb/llm/camera/backend/builtin.py:28` — `get_camera_backend("auto", …)` is given the page's
+  cameras beside this machine's.
+
+A capture that names no device is this machine's camera even so — the presence photo at
+`zrb_init.py:481` is taken that way — and only a named one is asked of the page, as in
+`/photo back camera`. `src/zrb/llm/camera/backend/auto.py:23` is where that rule is written.
 
 ### zrb settings it depends on
 

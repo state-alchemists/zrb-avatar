@@ -16,6 +16,17 @@
   #status { position: fixed; bottom: 8px; width: 100%; text-align: center; color: var(--glow); font: 12px monospace; opacity: .7; }
   html.app #status { display: none; }
   html.app #status.error { display: block; color: #f46; opacity: 1; }
+  /* What the keys do, said on the page they work on. Nothing here starts on load — a browser gives
+     neither a microphone nor a sound before a gesture — so the first line is the one that matters: a
+     key pressed into a window that never had focus does nothing, and that reads as a broken page.
+     Hidden in the app, where the window is her body rather than a manual and the table is README.md's. */
+  #keys {
+    position: fixed; left: 10px; bottom: 8px; max-width: 46%;
+    color: #8fa8c4; font: 11px/1.6 monospace; opacity: .55; pointer-events: none;
+  }
+  #keys b { color: var(--glow); font-weight: 600; }
+  #keys .first { display: block; color: #ffd76a; }
+  html.app #keys { display: none; }
   /* What she is saying: under her, over the status line, gone when the voice stops. The client
      sends a clear as the audio is read, ahead of the ear, so the line is ended by the mouth
      rather than by the clear — see js/main.js speechEnded. */
@@ -46,6 +57,19 @@
 </head>
 <body>
 <div id="subtitle"></div>
+<!-- The keys, on the page they work on. The first line is the one that matters: a browser starts
+     neither a microphone nor a sound before a gesture, so a page that has never been clicked swallows
+     every key and looks broken. The `m` entry is rewritten by js/main.js as the microphone comes and
+     goes, so the word there is always what that press will do next. -->
+<div id="keys">
+  <span class="first">click the page, then:</span>
+  <b>m</b> <span id="mic">talk and listen</span> ·
+  <b>c</b> allow this camera ·
+  <b>← → ↑ ↓</b> look around ·
+  <b>shift+↑↓</b> her face or her feet ·
+  <b>+ -</b> zoom ·
+  <b>0</b> reset
+</div>
 <div id="status">loading…</div>
 <script type="module" src="js/main.js"></script>
 </body>

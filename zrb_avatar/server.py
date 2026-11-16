@@ -23,6 +23,14 @@ the rest on (see AUTONOMY_DEFAULTS).
 A {"type": "blink", "eyes": "both"|"left"|"right", "seconds": 0.2} event is a blink she chose; it is
 relayed like a pose and not remembered, because a blink that arrived while a page was reloading has
 already happened.
+Audio for a page that is the only microphone and the only speaker: POST /audio takes its
+microphone (16 kHz mono 16-bit, measured or chunked), and GET /audio/in is that same audio handed
+to zrb's dictation; POST /say takes what zrb's speech player made, and GET /audio/out hands it to
+the page. Both GETs are one long response of raw frames, never JSON: the headers name the format,
+and a sentence made at a new sample rate ends the out stream so the page connects again and reads
+that rate rather than playing it at the wrong pitch. Nothing here knows what speech is; audio.py
+holds the two queues and the caps on them.
+
 Stdlib only; run with `python3 server.py` or `zrb-avatar serve`, then open http://localhost:7777.
 
 With ZRB_AVATAR_TOKEN set, every request has to carry that token: `Authorization: Bearer <token>`,
@@ -73,9 +81,9 @@ from importlib import metadata
 from pathlib import Path
 
 try:  # imported as `zrb_avatar.server`, which is how the tests and every tool see her
-    from zrb_avatar import auth
+    from zrb_avatar import audio, auth
 except ImportError:  # run as a script beside the package, which is how `zrb-avatar` starts her
-    import auth
+    import audio, auth
 
 # zrb spells its own settings <ENV_PREFIX>_*, and reads that prefix from the bare
 # `_ZRB_ENV_PREFIX` -- the bootstrap key in zrb's config, deliberately unprefixed so it
@@ -121,6 +129,10 @@ SNAPSHOT_SECONDS = 6.0  # how long GET /snapshot waits for a page to answer
 # switch leaves the old model on screen until the new file has loaded: in both cases the
 # window is there, and the picture that arrives is of the wrong thing.
 SNAPSHOT_INSIST_SECONDS = 2.0
+MAX_FRAME_BYTES = 24_000_000  # a phone's JPEG as a data: URL, which inflates it by a third
+# How long GET /frame waits for a page to answer: longer than a snapshot, because a camera has to
+# open before it can take anything, and a phone takes a moment to do that.
+FRAME_SECONDS = 12.0
 AUTONOMY = (
     "dance",
     "blush",
@@ -230,6 +242,19 @@ _autonomy: dict = dict(AUTONOMY_DEFAULTS)  # what she agreed to; see load_autono
 _snapshots: dict[str, dict] = (
     {}
 )  # id -> {"done": Event, "image": bytes, "about": dict}, while asked for
+_frames: dict[str, dict] = (
+    {}
+)  # id -> {"done": Event, "image": bytes, "refusals": [str]}, while asked for
+# The names each page gave its cameras (POST /frame/devices?page=<id>), by the id the page chose for
+# itself. A page labels a camera only once it has been allowed one, so this is a report rather than a
+# discovery, and each report replaces that page's last one. Kept per page because two pages are
+# normal now -- a laptop and a phone -- and a name is only ever one page's: the page without the
+# camera can only answer that it has none, and its refusal must not answer for everyone.
+_cameras: dict[str, list[str]] = {}
+_cameras_lock = threading.Lock()
+# Which page each event stream is, by the id that page gave at /events?page=<id>. Held with the pages
+# themselves, because it is discarded with them.
+_page_ids: dict[queue.Queue, str] = {}
 
 # Prints "Playing" or "Paused" whenever any media session (a browser, Spotify, ...) changes.
 _WINDOWS_MEDIA = r"""
@@ -951,6 +976,197 @@ def take_snapshot(timeout: float = SNAPSHOT_SECONDS) -> tuple[bytes, dict] | Non
         _snapshots.pop(key, None)
 
 
+def take_frame(
+    device: str | None, timeout: float = FRAME_SECONDS
+) -> tuple[bytes, str]:
+    """Ask the pages for a photo from *device*; the first photo wins, and only a photo.
+
+    Which page it is has to be settled before anything is asked, so that is first: `camera_owner`
+    resolves the name to one page, or gives back the sentence saying why the name is nobody's -- a
+    label two pages report, which asked for bare could only be a photo from whichever machine
+    answered first. In that case the sentence is the whole answer and no page hears of it.
+
+    Otherwise whom to ask is known: each page reports its own camera names, so the page that
+    reported the name is the page that can take it, and the others are not asked at all. Asking
+    everyone at once is how a refusal came to be the answer -- the laptop without the phone's back
+    camera says so first, and the photo arriving a moment later is too late. A name no page has
+    reported is asked of every page, since a page reports only after it has been allowed a camera
+    and the report can be a moment behind.
+
+    A refusal does not end this while a page that was asked has yet to answer: it is one page
+    saying it could not, and the page holding the camera may still be taking the photo. When every
+    page asked has answered and none of them had a photo, nobody is left to wait for.
+
+    The ask is repeated for as long as the timeout lasts, so a page that connects late still
+    answers. The second value is the last sentence a page gave, which is the sentence the user
+    needs rather than a failure with no reason; an empty image means no photo at all.
+    """
+    owner = camera_owner(device or "")
+    if isinstance(owner, str):
+        return b"", owner  # two pages' camera: the ask never leaves, and the sentence says why
+    page, label = owner if owner else ("", device or "")
+    key = secrets.token_hex(8)
+    waiting = _frames[key] = {
+        "done": threading.Event(),
+        "image": b"",
+        "refusals": [],
+    }
+    message = json.dumps({"type": "frame", "id": key, "device": label})
+    deadline = time.monotonic() + timeout
+    asked: set[queue.Queue] = set()  # each page once: a second ask is a second photo
+    try:
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                return b"", _last_refusal(waiting)
+            for asking in _pages_for_frame(page):
+                if asking not in asked:
+                    asked.add(asking)
+                    asking.put(message)
+            if waiting["done"].wait(min(0.5, deadline - now)):
+                return waiting["image"], ""
+            if asked and len(waiting["refusals"]) >= len(asked):
+                return b"", _last_refusal(waiting)  # every page asked said it could not
+    finally:
+        _frames.pop(key, None)
+
+
+def _pages_for_frame(page: str) -> list[queue.Queue]:
+    """The open pages a photo should be asked of.
+
+    The page the name resolved to, and every page when no page reported the name at all -- or when
+    the page that did has gone, since a page that connects late carries its own report with it.
+    """
+    with _lock:
+        open_pages = list(_clients)
+        if not page:
+            return open_pages
+        holding = [client for client in open_pages if _page_ids.get(client, "") == page]
+    return holding or open_pages
+
+
+def _last_refusal(waiting: dict) -> str:
+    """The most recent sentence a page gave for having no photo.
+
+    The last rather than the first: the pages that said so earliest are the ones least likely to
+    have had the camera, so a camera in use is a more useful sentence than a name nobody has.
+    """
+    refusals = waiting["refusals"]
+    return refusals[-1] if refusals else ""
+
+
+def _qualified(label: str, page: str) -> str:
+    """*label* as that one page's camera: the name a label two pages report is offered under."""
+    return f"{label} ({page})"
+
+
+def _claimed_cameras() -> dict[str, list[str]]:
+    """Every camera label the pages reported, and the ids of the pages that reported it.
+
+    Built from the reports rather than kept beside them: the order is the order they were reported
+    in, and a label two pages answer to is the one case a name alone cannot settle.
+    """
+    claimed: dict[str, list[str]] = {}
+    with _cameras_lock:
+        for page, names in _cameras.items():
+            for name in names:
+                pages = claimed.setdefault(name, [])
+                if page not in pages:
+                    pages.append(page)
+    return claimed
+
+
+def _ambiguous(label: str, pages: list[str]) -> str:
+    """The refusal for a label more than one page reports: which pages, and what to ask instead."""
+    return (
+        f"{label} is claimed by pages {', '.join(pages)}; "
+        f"ask for {' or '.join(_qualified(label, page) for page in pages)}"
+    )
+
+
+def camera_owner(device: str) -> tuple[str, str] | str | None:
+    """Which page *device* is, and the label to ask that page for; or why it is nobody's alone.
+
+    A name resolves three ways. One page reporting it makes it that page's camera, by its own
+    label, which is how every name resolved before two pages were normal. Two pages reporting it
+    makes it neither's: asking both would take whichever answered first, and a photo from the
+    other machine is the wrong photo rather than a slow one -- so such a label is offered
+    qualified, `back camera (<page>)`, and asked for bare it is refused with a string, the
+    sentence for the 503, saying which pages claim it and which names do one page. An empty answer
+    is a name no page has reported yet, which is asked of every page: a page reports only once it
+    has been allowed a camera, and that report can be a moment behind.
+
+    `page_cameras` offers exactly the names this resolves to one page, so a name in zrb's camera
+    list is a name `/photo` can take a photo with.
+    """
+    wanted = device.strip()
+    if not wanted:
+        return None
+    claimed = _claimed_cameras()
+    if wanted in claimed:  # a page's own label, asked for as it was reported
+        pages = claimed[wanted]
+        if len(pages) == 1:
+            return pages[0], wanted
+        return _ambiguous(wanted, pages)  # nobody's alone, so nothing is asked
+    for label, pages in claimed.items():  # a label qualified by the page that has it
+        if len(pages) < 2:
+            continue  # a name only one page reports is offered, and answered, bare
+        for page in pages:
+            if wanted == _qualified(label, page):
+                return page, label
+    return None
+
+
+def page_cameras() -> list[str]:
+    """The camera names the pages reported, which are labels rather than ids.
+
+    Every page's, in the order they were reported and once each: zrb offers them beside this
+    machine's own cameras, and what it asks for afterwards is a name rather than a page. A browser
+    hides a camera's label until that page has been allowed one, so this is empty until the first
+    grant, and filling in is the report that it happened.
+
+    A label only one page reports is offered as it is, because a name in a completion is one
+    somebody has already learned and typed. One that two pages report is offered once per page,
+    qualified with the page, since a bare name for it is a name that cannot pick a camera.
+    """
+    names: list[str] = []
+    for label, pages in _claimed_cameras().items():
+        if len(pages) == 1:
+            names.append(label)
+        else:
+            names.extend(_qualified(label, page) for page in pages)
+    return names
+
+
+def set_page_cameras(page: str, names: object) -> None:
+    """Replace what *page* reported; a page reports what it can see now, not an addition."""
+    cleaned = [
+        name.strip() for name in names if isinstance(name, str) and name.strip()
+    ] if isinstance(names, list) else []
+    with _cameras_lock:
+        if cleaned:
+            _cameras[page] = cleaned
+        else:
+            _cameras.pop(page, None)  # a page allowed nothing knows nothing
+
+
+def forget_page_cameras(page: str) -> None:
+    """Drop what *page* reported: its cameras went with the page that named them."""
+    with _cameras_lock:
+        _cameras.pop(page, None)
+
+
+def _status_reason(sentence: str) -> str:
+    """*sentence* as a status line's reason: one line, ASCII, and short enough to be one.
+
+    `send_error` puts it in the reason phrase, which is the one place a page's own words reach
+    zrb — the client repeats that instead of guessing — so it leaves here as a phrase a header
+    can carry rather than as text that would end the line early.
+    """
+    line = " ".join(sentence.split()).encode("ascii", "replace").decode("ascii")[:200]
+    return line or "the page could not take the photo"
+
+
 def _send_all(message: str) -> None:
     """Put one line in every open page's queue. The caller holds `_lock`."""
     for client in _clients:
@@ -1080,6 +1296,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(music_state())
         if path == "/autonomy":
             return self._json(autonomy_state())
+        if path == "/audio/in":  # the page's microphone, on its way to zrb's dictation
+            return self._relay_audio_to_zrb()
+        if path == "/audio/out":  # what zrb said, on its way to the page
+            return self._relay_speech_to_page()
         if path == "/snapshot":
             shot = take_snapshot()
             if shot is None:
@@ -1092,6 +1312,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(image)
             return
+        if path == "/frame":  # a camera this machine does not have: the page's own
+            return self._page_frame()
+        if path == "/frame/devices":  # the names the page last gave its cameras
+            return self._json({"devices": page_cameras()})
         if path == "/":
             return self._send(
                 (HERE / "face.html").read_bytes(), "text/html; charset=utf-8"
@@ -1148,11 +1372,88 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _body(self):
+        """The request body as it arrives, however the caller measured it.
+
+        A page streaming its microphone sends a chunked body and never says how long it is; a
+        fallback that posts a frame at a time measures each one. Both arrive here, and neither is
+        read with `read(-1)`, which would wait for the client to hang up before the first byte
+        reached a reader.
+        """
+        if (self.headers.get("Transfer-Encoding") or "").strip().lower() == "chunked":
+            yield from self._chunks()
+            return
+        size = self._length(audio.MAX_BODY_BYTES)
+        if size is None:
+            return
+        while size > 0:
+            block = self.rfile.read(min(size, 65536))
+            if not block:
+                return
+            size -= len(block)
+            yield block
+
+    def _chunks(self):
+        """The blocks of a chunked body, up to the one that ends it.
+
+        `fetch(url, {body, duplex: "half"})` is what sends this: the page has no length to give
+        while the microphone is open, and no way to end the request except by ending the body. A
+        body that stops in the middle of a chunk is a page that went away, and ends the same way an
+        ending does -- what arrived is kept, and nothing is waited for.
+        """
+        while True:
+            line = self.rfile.readline(64)
+            try:
+                size = int(line.split(b";")[0].strip(), 16)
+            except ValueError:
+                return
+            if size <= 0:
+                return  # the last chunk, or a page that stopped saying anything at all
+            block = self.rfile.read(size)
+            if len(block) < size:
+                return
+            self.rfile.read(2)  # the CRLF a chunk ends with, which is not audio
+            yield block
+
+    def _write_frames(self, channel, rate: int, follows_rate: bool = False):
+        """Write frames as they arrive, and a frame of silence when none does.
+
+        Raw PCM has no comment syntax, so the answer to a quiet queue is silence rather than
+        nothing: one frame of it, inaudible, which is also the only write that notices a page whose
+        tab has gone. *follows_rate* ends the response when a sentence is made at a rate this
+        stream is not at, because the headers are the only place a rate can say what it is -- and a
+        channel that has been replaced ends it at once, since the page asks again as soon as this
+        response ends, and waiting for that is waiting for the next sentence.
+        """
+        silence = audio.silence(rate)
+        try:
+            while not channel.ended:
+                frame = channel.take(audio.PING_SECONDS)
+                if frame is None:
+                    if channel.ended or (
+                        follows_rate and audio.outbound_rate() not in (None, rate)
+                    ):
+                        return
+                    frame = silence
+                self.wfile.write(frame)
+                self.wfile.flush()
+        except OSError:  # the far end closed: nothing left to say, and nobody to say it to
+            pass
+
     def do_POST(self):
         if not self._allowed():
             return self.send_error(401, "this server wants its token")
+        if self.path == "/audio":  # the page's microphone, until it stops talking
+            return self._take_audio()
+        if self.path == "/say":  # what zrb's speech player made
+            return self._take_speech()
         if self.path.startswith("/snapshot?"):
             return self._snapshot()
+        # The page's cameras, as the page names them: the page itself travels in the query.
+        if self.path == "/frame/devices" or self.path.startswith("/frame/devices?"):
+            return self._take_camera_names()
+        if self.path.startswith("/frame?"):
+            return self._frame()
         if self.path != "/event":
             return self.send_error(404)
         size = self._length(MAX_EVENT_BYTES)
@@ -1256,6 +1557,168 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
+    def _page_frame(self):
+        """One photo from the page's camera, as the page itself sees it.
+
+        A refusal is a status rather than an empty body: the page said a sentence -- it was not
+        allowed the camera, the camera is held by another app -- and the reason phrase is where
+        that sentence reaches zrb, which repeats it. An empty photo with no sentence would be a
+        failure the user cannot act on.
+        """
+        device = (
+            urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get(
+                "device", [""]
+            )[0]
+            or ""
+        ).strip()
+        image, refusal = take_frame(device or None, FRAME_SECONDS)
+        if image:
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(image)))
+            self.end_headers()
+            self.wfile.write(image)
+            return
+        if refusal:
+            return self.send_error(503, _status_reason(refusal))
+        return self.send_error(
+            504, _status_reason(f"no page took a photo from {device or 'its camera'}")
+        )
+
+    def _frame(self):
+        """A page's answer to a frame request: {"image": "data:image/jpeg;base64,..."} or
+        {"refusal": "the browser would not give me the camera"}. Only for an id asked for."""
+        key = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get(
+            "id", [""]
+        )[0]
+        waiting = _frames.get(key)
+        if waiting is None:
+            return self.send_error(404)
+        size = self._length(MAX_FRAME_BYTES)
+        if size is None:
+            return
+        try:
+            answer = json.loads(self.rfile.read(size))
+        except ValueError:
+            return self.send_error(400)
+        if not isinstance(answer, dict):
+            return self.send_error(400)
+        image = b""
+        if "image" in answer:
+            try:
+                header, data = answer["image"].split(",", 1)
+                if header != "data:image/jpeg;base64":
+                    raise ValueError(header)
+                image = base64.b64decode(data, validate=True)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                return self.send_error(400)
+        refusal = "" if image else str(answer.get("refusal") or "").strip()
+        if image:
+            if not waiting["done"].is_set():
+                waiting["image"] = image
+                waiting["done"].set()
+        else:  # one sentence per page: a refusal is that page's answer, not the conversation's
+            waiting["refusals"].append(
+                refusal or "the page sent no photo and no reason"
+            )
+        self.send_response(204)
+        self.end_headers()
+
+    def _take_camera_names(self):
+        """The names a page gives its cameras: labels, by the id the page goes by.
+
+        A page labels a camera only once it has been allowed one, so this is a report and not a
+        discovery, and the last report from that page is the whole truth about it: a page allowed
+        nothing knows nothing. Kept per page because a name belongs to the page that gave it --
+        `take_frame` asks that page, and only that page, when zrb names one.
+        """
+        size = self._length(MAX_EVENT_BYTES)
+        if size is None:
+            return
+        try:
+            payload = json.loads(self.rfile.read(size))
+        except ValueError:
+            return self.send_error(400)
+        names = payload.get("devices") if isinstance(payload, dict) else None
+        if not isinstance(names, list):
+            return self.send_error(400, 'a camera report is {"devices": [name, ...]}')
+        page = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get(
+            "page", [""]
+        )[0]
+        set_page_cameras(page, names)
+        self.send_response(204)
+        self.end_headers()
+
+    def _take_audio(self):
+        """The page's microphone: one long request, its blocks handed to zrb as they arrive.
+
+        The format is refused rather than accepted and mistranscribed: audio at another rate is
+        noise to every speech-to-text backend, and a request that says so is a page to fix, not a
+        transcript to read.
+        """
+        rate = (self.headers.get("X-Sample-Rate") or "").strip()
+        channels = (self.headers.get("X-Channels") or "").strip()
+        wanted, mono = str(audio.INBOUND_RATE), str(audio.CHANNELS)
+        if (rate or wanted) != wanted or (channels or mono) != mono:
+            return self.send_error(
+                415,
+                f"audio in is {wanted} Hz mono; got {rate or '?'} Hz, "
+                f"{channels or '?'} channel(s)",
+            )
+        for block in self._body():
+            audio.put_inbound(block)
+        self.send_response(204)
+        self.end_headers()
+
+    def _take_speech(self):
+        """What zrb's speech player made, with the rate it was made at in the header."""
+        try:
+            rate = int((self.headers.get("X-Sample-Rate") or "").strip())
+        except ValueError:
+            rate = 0
+        if not audio.is_supported_rate(rate):
+            return self.send_error(
+                415, "X-Sample-Rate names no rate speech can have"
+            )
+        for block in self._body():
+            audio.put_outbound(block, rate)
+        self.send_response(204)
+        self.end_headers()
+
+    def _relay_audio_to_zrb(self):
+        """The page's microphone, as one long response of raw frames.
+
+        One reader at a time is the point: two would halve the audio between them and neither
+        would transcribe a sentence. Taking the channel first is what makes this reader the one —
+        a reader that has gone is replaced here rather than left holding the next block.
+        """
+        channel = audio.start_reading("in")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Sample-Rate", str(audio.INBOUND_RATE))
+        self.send_header("X-Sample-Width", str(audio.SAMPLE_WIDTH))
+        self.send_header("X-Channels", str(audio.CHANNELS))
+        self.end_headers()
+        self._write_frames(channel, audio.INBOUND_RATE)
+
+    def _relay_speech_to_page(self):
+        """What zrb said, as one long response of raw frames, at the rate the headers name.
+
+        The channel and the rate are taken in one step (`audio.start_reading_outbound`), because the
+        page configures itself from that header: a sentence made at another rate rotates the channel,
+        and a rate read separately from the channel it belongs to is a sentence played wrong.
+        """
+        channel, rate = audio.start_reading_outbound()
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/L16")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Sample-Rate", str(rate))
+        self.send_header("X-Sample-Width", str(audio.SAMPLE_WIDTH))
+        self.send_header("X-Channels", str(audio.CHANNELS))
+        self.end_headers()
+        self._write_frames(channel, rate, follows_rate=True)
+
     def _stream(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -1266,15 +1729,19 @@ class Handler(BaseHTTPRequestHandler):
         # named one asked for it -- `zrb-avatar <model>` opens the window with it -- so the remembered
         # model is replayed only to a page that did not ask. Otherwise the page loads what it was
         # told and is switched a moment later to what was remembered, and the argument is lost.
-        shows = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get(
-            "model", [""]
-        )[0]
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        shows = query.get("model", [""])[0]
+        # And which page it is (/events?page=<id>, the same id its camera report carries), so a photo
+        # can be asked of the page that named the camera rather than of every page in the room.
+        page = query.get("page", [""])[0]
         chosen = None if shows else chosen_model()
         # What it missed, and joining the pages that hear what comes next, are one step: a held pose
         # (or a release) arriving between them would be in neither, and a reload would stand her up
         # in the middle of a thought — or bring back a posture she had already let go of.
         with _lock:
             _clients.add(client)
+            if page:
+                _page_ids[client] = page
             if shows:
                 _showing[client] = shows
             _replay(client, chosen)
@@ -1292,6 +1759,12 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 _clients.discard(client)
                 _showing.pop(client, None)
+                page = _page_ids.pop(client, None)
+                # A stream that reconnects carries the same id, so a page is only gone when no
+                # stream of its own is still open.
+                gone = page is not None and page not in _page_ids.values()
+            if page is not None and gone:
+                forget_page_cameras(page)  # its cameras went with it
 
     def log_message(self, format, *args):
         pass
