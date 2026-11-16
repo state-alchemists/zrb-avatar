@@ -981,12 +981,17 @@ def take_frame(
 ) -> tuple[bytes, str]:
     """Ask the pages for a photo from *device*; the first photo wins, and only a photo.
 
-    Whom to ask is known: each page reports its own camera names, so a page that reported *device* is
-    a page that can take it, and the others are not asked at all. Asking everyone at once is how a
-    refusal came to be the answer -- the laptop without the phone's back camera says so first, and
-    the photo arriving a moment later is too late. A name no page has reported is asked of every
-    page, since a page reports only after it has been allowed a camera and the report can be a
-    moment behind.
+    Which page it is has to be settled before anything is asked, so that is first: `camera_owner`
+    resolves the name to one page, or gives back the sentence saying why the name is nobody's -- a
+    label two pages report, which asked for bare could only be a photo from whichever machine
+    answered first. In that case the sentence is the whole answer and no page hears of it.
+
+    Otherwise whom to ask is known: each page reports its own camera names, so the page that
+    reported the name is the page that can take it, and the others are not asked at all. Asking
+    everyone at once is how a refusal came to be the answer -- the laptop without the phone's back
+    camera says so first, and the photo arriving a moment later is too late. A name no page has
+    reported is asked of every page, since a page reports only after it has been allowed a camera
+    and the report can be a moment behind.
 
     A refusal does not end this while a page that was asked has yet to answer: it is one page
     saying it could not, and the page holding the camera may still be taking the photo. When every
@@ -996,13 +1001,17 @@ def take_frame(
     answers. The second value is the last sentence a page gave, which is the sentence the user
     needs rather than a failure with no reason; an empty image means no photo at all.
     """
+    owner = camera_owner(device or "")
+    if isinstance(owner, str):
+        return b"", owner  # two pages' camera: the ask never leaves, and the sentence says why
+    page, label = owner if owner else ("", device or "")
     key = secrets.token_hex(8)
     waiting = _frames[key] = {
         "done": threading.Event(),
         "image": b"",
         "refusals": [],
     }
-    message = json.dumps({"type": "frame", "id": key, "device": device or ""})
+    message = json.dumps({"type": "frame", "id": key, "device": label})
     deadline = time.monotonic() + timeout
     asked: set[queue.Queue] = set()  # each page once: a second ask is a second photo
     try:
@@ -1010,10 +1019,10 @@ def take_frame(
             now = time.monotonic()
             if now >= deadline:
                 return b"", _last_refusal(waiting)
-            for page in _pages_for_frame(device):
-                if page not in asked:
-                    asked.add(page)
-                    page.put(message)
+            for asking in _pages_for_frame(page):
+                if asking not in asked:
+                    asked.add(asking)
+                    asking.put(message)
             if waiting["done"].wait(min(0.5, deadline - now)):
                 return waiting["image"], ""
             if asked and len(waiting["refusals"]) >= len(asked):
@@ -1022,20 +1031,17 @@ def take_frame(
         _frames.pop(key, None)
 
 
-def _pages_for_frame(device: str | None) -> list[queue.Queue]:
-    """The open pages a photo from *device* should be asked of.
+def _pages_for_frame(page: str) -> list[queue.Queue]:
+    """The open pages a photo should be asked of.
 
-    The pages that reported the name, and every page when none did -- or when the pages that
-    reported it have gone, since a page that connects late carries its own report with it.
+    The page the name resolved to, and every page when no page reported the name at all -- or when
+    the page that did has gone, since a page that connects late carries its own report with it.
     """
-    wanted = device or ""
-    with _cameras_lock:
-        reporters = {page for page, names in _cameras.items() if wanted and wanted in names}
-        with _lock:
-            open_pages = list(_clients)
-            if not reporters:
-                return open_pages
-            holding = [page for page in open_pages if _page_ids.get(page, "") in reporters]
+    with _lock:
+        open_pages = list(_clients)
+        if not page:
+            return open_pages
+        holding = [client for client in open_pages if _page_ids.get(client, "") == page]
     return holding or open_pages
 
 
@@ -1049,6 +1055,68 @@ def _last_refusal(waiting: dict) -> str:
     return refusals[-1] if refusals else ""
 
 
+def _qualified(label: str, page: str) -> str:
+    """*label* as that one page's camera: the name a label two pages report is offered under."""
+    return f"{label} ({page})"
+
+
+def _claimed_cameras() -> dict[str, list[str]]:
+    """Every camera label the pages reported, and the ids of the pages that reported it.
+
+    Built from the reports rather than kept beside them: the order is the order they were reported
+    in, and a label two pages answer to is the one case a name alone cannot settle.
+    """
+    claimed: dict[str, list[str]] = {}
+    with _cameras_lock:
+        for page, names in _cameras.items():
+            for name in names:
+                pages = claimed.setdefault(name, [])
+                if page not in pages:
+                    pages.append(page)
+    return claimed
+
+
+def _ambiguous(label: str, pages: list[str]) -> str:
+    """The refusal for a label more than one page reports: which pages, and what to ask instead."""
+    return (
+        f"{label} is claimed by pages {', '.join(pages)}; "
+        f"ask for {' or '.join(_qualified(label, page) for page in pages)}"
+    )
+
+
+def camera_owner(device: str) -> tuple[str, str] | str | None:
+    """Which page *device* is, and the label to ask that page for; or why it is nobody's alone.
+
+    A name resolves three ways. One page reporting it makes it that page's camera, by its own
+    label, which is how every name resolved before two pages were normal. Two pages reporting it
+    makes it neither's: asking both would take whichever answered first, and a photo from the
+    other machine is the wrong photo rather than a slow one -- so such a label is offered
+    qualified, `back camera (<page>)`, and asked for bare it is refused with a string, the
+    sentence for the 503, saying which pages claim it and which names do one page. An empty answer
+    is a name no page has reported yet, which is asked of every page: a page reports only once it
+    has been allowed a camera, and that report can be a moment behind.
+
+    `page_cameras` offers exactly the names this resolves to one page, so a name in zrb's camera
+    list is a name `/photo` can take a photo with.
+    """
+    wanted = device.strip()
+    if not wanted:
+        return None
+    claimed = _claimed_cameras()
+    if wanted in claimed:  # a page's own label, asked for as it was reported
+        pages = claimed[wanted]
+        if len(pages) == 1:
+            return pages[0], wanted
+        return _ambiguous(wanted, pages)  # nobody's alone, so nothing is asked
+    for label, pages in claimed.items():  # a label qualified by the page that has it
+        if len(pages) < 2:
+            continue  # a name only one page reports is offered, and answered, bare
+        for page in pages:
+            if wanted == _qualified(label, page):
+                return page, label
+    return None
+
+
 def page_cameras() -> list[str]:
     """The camera names the pages reported, which are labels rather than ids.
 
@@ -1056,12 +1124,18 @@ def page_cameras() -> list[str]:
     machine's own cameras, and what it asks for afterwards is a name rather than a page. A browser
     hides a camera's label until that page has been allowed one, so this is empty until the first
     grant, and filling in is the report that it happened.
+
+    A label only one page reports is offered as it is, because a name in a completion is one
+    somebody has already learned and typed. One that two pages report is offered once per page,
+    qualified with the page, since a bare name for it is a name that cannot pick a camera.
     """
-    with _cameras_lock:
-        names: list[str] = []
-        for reported in _cameras.values():
-            names.extend(name for name in reported if name not in names)
-        return names
+    names: list[str] = []
+    for label, pages in _claimed_cameras().items():
+        if len(pages) == 1:
+            names.append(label)
+        else:
+            names.extend(_qualified(label, page) for page in pages)
+    return names
 
 
 def set_page_cameras(page: str, names: object) -> None:

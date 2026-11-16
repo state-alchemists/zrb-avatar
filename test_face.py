@@ -1220,6 +1220,52 @@ time.sleep(0.5)
 client.request("GET", "/frame?device=back%20camera")
 photo = client.getresponse()
 assert photo.status == 200 and photo.read() == JPEG  # the phone's, though the laptop answered sooner
+
+# A label two pages report is nobody's camera, and the list says so: it is offered once per page,
+# qualified, and asked for bare it is refused before any page is asked at all -- the first photo to
+# arrive would be the right answer only half the time. Every other name stays exactly as it was,
+# because a name in zrb's completion is one somebody has already learned and typed.
+SHARED = "shared cam"
+for page, devices in (
+    ("phone", ["back camera", SHARED]),
+    ("laptop", ["FaceTime HD", SHARED]),
+):
+    client.request(
+        "POST", f"/frame/devices?page={page}", json.dumps({"devices": devices})
+    )
+    assert client.getresponse().status == 204
+assert sorted(server.page_cameras()) == sorted(
+    ["back camera", "FaceTime HD", f"{SHARED} (phone)", f"{SHARED} (laptop)"]
+), server.page_cameras()
+assert SHARED not in server.page_cameras()  # the bare name is offered for neither page alone
+
+
+def ask_frame(name: str) -> tuple[int, str, bytes]:
+    """One GET /frame for a camera, by the name zrb would ask with: status, reason, body."""
+    client.request("GET", "/frame?device=" + name.replace(" ", "%20"))
+    answer = client.getresponse()
+    return answer.status, answer.reason, answer.read()
+
+
+status, sentence, _ = ask_frame(SHARED)
+assert status == 503, (status, sentence)  # refused, not taken from whichever page answered first
+assert "phone" in sentence and "laptop" in sentence, sentence
+assert f"{SHARED} (phone)" in sentence and f"{SHARED} (laptop)" in sentence, sentence
+# And the qualified name is a name that picks a page: the laptop answers at once with its own
+# camera, and the photo that comes back is still the phone's.
+for name, image, wait in (("laptop", LAPTOP_JPEG, 0.1), ("phone", JPEG, 0.5)):
+    threading.Thread(
+        target=photographer,
+        args=(
+            {"image": "data:image/jpeg;base64," + base64.b64encode(image).decode()},
+            wait,
+            name,
+        ),
+        daemon=True,
+    ).start()
+time.sleep(0.5)
+status, _, body = ask_frame(f"{SHARED} (phone)")
+assert status == 200 and body == JPEG  # the phone's, though the laptop answered sooner
 server.FRAME_SECONDS = saved_frame_seconds  # the real deadline back, for anything after this
 
 # A page's cameras go with the page. A report kept for a page that has gone would grow by one set of

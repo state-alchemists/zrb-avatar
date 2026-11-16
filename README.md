@@ -548,13 +548,17 @@ reads as a broken page:
 
 Two pages can be open at once — the laptop and the phone — and each one keeps its own camera names:
 a photo is asked of the page that named the camera, and a page that answers "I have no such camera"
-cannot become the answer while the page that does have one is still taking the photo.
+cannot become the answer while the page that does have one is still taking the photo. When both
+pages report the same name — two tabs on one phone, or two machines with the same webcam — the name
+is offered once per page as `back camera (<page>)` and asking for it bare is refused, saying which
+pages claim it: a name two machines answer to would otherwise be a photo from whichever answered
+first. A name only one page reports is offered exactly as it was.
 
 ### Which half lives where
 
-This repository is the page and the routes it speaks: `zrb_avatar/server.py:1225` hands `/audio/in`
-to zrb's dictation, `server.py:1374` takes `/say` from its speech player, and `server.py:1241` and
-`server.py:1243` answer `/frame` and `/frame/devices` for a camera on the page. The browser end of
+This repository is the page and the routes it speaks: `zrb_avatar/server.py:1299` hands `/audio/in`
+to zrb's dictation, `server.py:1448` takes `/say` from its speech player, and `server.py:1315` and
+`server.py:1317` answer `/frame` and `/frame/devices` for a camera on the page. The browser end of
 those is `zrb_avatar/js/audio.js` and `zrb_avatar/js/camera.js`.
 
 Honouring `ZRB_LLM_VOICE_REMOTE_URL` is zrb's, and nothing here repeats that decision. zrb reads it
