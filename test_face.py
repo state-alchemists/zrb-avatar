@@ -1394,6 +1394,15 @@ for state in [*states, "dance", "actions"]:
     have = server.anims()
     assert any(have.get(state, {}) or have.get("idle", {})), f"no clip for the {state} pool"
 
+# Every key the page listens for is a key the page says it listens for. Nothing starts on load — a
+# browser refuses a microphone and a sound before a gesture — so a key nobody was told about is a
+# feature nobody finds, and a key pressed into an unfocused window reads as a broken page: the hint
+# says that too, in the first line.
+page_html = (server.HERE / "face.html").read_text()
+for key in re.findall(r"e\.key !== '([^']+)'", page):
+    assert f"<b>{key}</b>" in page_html, f"the page handles {key!r} and never says so"
+assert "click the page" in page_html
+
 # Every name AvatarPose (zrb_init.py) offers is one the page (js/pose.js) knows.
 tools = (server.HERE / "zrb_init.py").read_text()
 pose_js = (server.HERE / "js" / "pose.js").read_text()

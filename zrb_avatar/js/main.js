@@ -78,12 +78,16 @@ function setState(value) {
 // outside `her` because the audio outlives any one model and has to survive the swap, and opened by
 // nothing on load — a browser refuses a microphone and a sound before a gesture, and a refusal reads
 // as a broken page rather than as a browser doing its job. The key below is the gesture.
+const micKey = document.getElementById('mic'); // the hint's own `m`, which says what it will do next
 const audio = createAudio({
   // Said on the status line, where a model that will not load says its piece: a microphone the
-  // browser refused has to look like a refusal, not like a switch that does nothing.
-  onState: ({ error }) => {
+  // browser refused has to look like a refusal, not like a switch that does nothing. And the key in
+  // the hint changes with it — `m talk and listen`, then `m stop` — because a press that leaves
+  // nothing looking different is a page that seems not to have heard the press.
+  onState: ({ mic, error }) => {
     statusEl.textContent = error || state;
     statusEl.classList.toggle('error', !!error);
+    if (micKey) micKey.textContent = error ? 'refused' : mic ? 'stop' : 'talk and listen';
   },
 });
 window.audio = audio; // for a transcript page and for devtools, as window.face is

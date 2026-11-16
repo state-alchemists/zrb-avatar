@@ -395,12 +395,16 @@ do not commit or share them.
 ### Using it
 
 - **Move**: drag her. **Close**: Alt+F4 on Windows, Cmd+Q on macOS.
-- **Camera**: click the window, then use the keys below. The angle is remembered.
+- **Keys**: click the window first, then press — a browser gives no microphone and makes no sound
+  until the page has been touched, and a key pressed into a window that never had focus is not
+  heard at all. The page lists these keys along its bottom edge. The camera's angle is remembered.
 - **Clicks** go through the see-through window to whatever is behind it, except on her (Windows and
   macOS). Linux cannot pass the mouse through, so the whole window takes clicks there.
 
 | Key | What it does |
 | --- | --- |
+| `m` | Microphone and speaker at once: zrb hears this device, and her voice comes out of it. Again turns both off. |
+| `c` | Allow this page's camera, so zrb can ask for a photo by name (`/photo phone-back`, `zrb-avatar frame`). |
 | ← → | Orbit around her. |
 | ↑ ↓ | Orbit over her head or under her feet, all the way round. |
 | Shift+↑ / Shift+↓ | Move the camera's focus up or down her body (to her face, say). |
