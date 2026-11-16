@@ -1397,8 +1397,9 @@ for state in [*states, "dance", "actions"]:
 # Every key the page listens for is a key the page says it listens for. Nothing starts on load — a
 # browser refuses a microphone and a sound before a gesture — so a key nobody was told about is a
 # feature nobody finds, and a key pressed into an unfocused window reads as a broken page: the hint
-# says that too, in the first line.
-page_html = (server.HERE / "face.html").read_text()
+# says that too, in the first line. Read as UTF-8, both of them: the page's arrows are not characters
+# Windows' own encoding has.
+page_html = (server.HERE / "face.html").read_text(encoding="utf-8")
 for key in re.findall(r"e\.key !== '([^']+)'", page):
     assert f"<b>{key}</b>" in page_html, f"the page handles {key!r} and never says so"
 assert "click the page" in page_html
@@ -2164,7 +2165,7 @@ assert headers["X-Sample-Width"] == "2" and headers["X-Channels"] == "1"
 # or a request that never opens at all — posts the same blocks one at a time instead. Both are in the
 # page because the difference only shows in a browser: a real Chrome refused the streamed request
 # outright with an ALPN error, and the fallback carried the audio from there.
-audio_js = (server.HERE / "js" / "audio.js").read_text()
+audio_js = (server.HERE / "js" / "audio.js").read_text(encoding="utf-8")
 open_post = audio_js[audio_js.index("function openPost()"):audio_js.index("function postEachBlock()")]
 assert "if (!streamsBody()) return postEachBlock();" in open_post
 assert "duplex: 'half'" in open_post and "postEachBlock()" in open_post  # a start that failed goes on
