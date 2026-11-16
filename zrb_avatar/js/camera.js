@@ -74,13 +74,17 @@ export function createCamera({ onState, page = '' } = {}) {
     const found = await videoInputs();
     names = found.map(nameOf);
     changed();
-    // A page not allowed a camera knows only how many it has, and an unlabelled guess would
-    // replace the names another page already gave: nothing is reported until a name is known.
-    if (!found.some(device => device.label)) return names;
+    // A page not allowed a camera knows only how many it has: "camera 2" is a position rather
+    // than a name, so it is not reported and zrb is never handed one to ask for. An empty report
+    // is still a report -- the server drops a page's names when one is handed to it -- and that
+    // is how a camera whose permission was taken away stops being offered. Returning early here
+    // would leave the old names standing, and zrb would keep asking a page that can no longer
+    // answer.
+    const report = found.some(device => device.label) ? names : [];
     try {
       await fetch(`frame/devices?page=${encodeURIComponent(page)}`, {
         method: 'POST',
-        body: JSON.stringify({ devices: names }),
+        body: JSON.stringify({ devices: report }),
       });
     } catch {
       // The server is going away; the names are published again on the next grant or photo.
