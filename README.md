@@ -550,6 +550,28 @@ Two pages can be open at once — the laptop and the phone — and each one keep
 a photo is asked of the page that named the camera, and a page that answers "I have no such camera"
 cannot become the answer while the page that does have one is still taking the photo.
 
+### Which half lives where
+
+This repository is the page and the routes it speaks: `zrb_avatar/server.py:1225` hands `/audio/in`
+to zrb's dictation, `server.py:1374` takes `/say` from its speech player, and `server.py:1241` and
+`server.py:1243` answer `/frame` and `/frame/devices` for a camera on the page. The browser end of
+those is `zrb_avatar/js/audio.js` and `zrb_avatar/js/camera.js`.
+
+Honouring `ZRB_LLM_VOICE_REMOTE_URL` is zrb's, and nothing here repeats that decision. zrb reads it
+at `src/zrb/llm/util/face_server.py:46`, and three places act on it:
+
+- `src/zrb/llm/dictation/microphone.py:127` — `open_microphone` returns the page's microphone before
+  any stream of this machine's is opened.
+- `src/zrb/llm/speech/pcm_player.py:578` — the player's output stream is the page's speaker, so the
+  PCM a speech backend renders is posted to `/say`. Which stream to open is the player's, and a
+  speech backend here returns its audio and nothing else.
+- `src/zrb/llm/camera/backend/builtin.py:28` — `get_camera_backend("auto", …)` is given the page's
+  cameras beside this machine's.
+
+A capture that names no device is this machine's camera even so — the presence photo at
+`zrb_init.py:481` is taken that way — and only a named one is asked of the page, as in
+`/photo back camera`. `src/zrb/llm/camera/backend/auto.py:23` is where that rule is written.
+
 ### zrb settings it depends on
 
 | Setting | Why it matters |
