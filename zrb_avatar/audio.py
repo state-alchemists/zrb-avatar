@@ -21,8 +21,9 @@ must not grow this process a second at a time; what is lost is audio already too
 over.
 """
 
-import queue
 import threading
+import time
+from collections import deque
 
 # What dictation wants: 16-bit mono at 16 kHz is what every speech-to-text backend zrb reaches
 # takes, and a page resampling to it is one line of AudioWorklet.
@@ -40,8 +41,10 @@ DEFAULT_OUTBOUND_RATE = 24000
 MIN_RATE = 1000
 MAX_RATE = 384000
 
-# How much audio a queue holds before it starts dropping. Two seconds is past every reader's
-# latency by an order of magnitude, so a full queue is a reader that has stopped.
+# How much audio a queue holds before it starts dropping, as a length of audio rather than a number
+# of blocks: a block is whatever a writer handed over, and the page's microphone is a tenth of a
+# second while one of her sentences can be most of one. Two seconds is past every reader's latency by
+# an order of magnitude, so a full queue is a reader that has stopped.
 KEEP_SECONDS = 2.0
 
 # One frame, for the silence a quiet queue is answered with: 20 ms is what a page's ring buffer
@@ -58,35 +61,52 @@ PING_SECONDS = 15.0
 MAX_BODY_BYTES = 1_000_000
 
 
-_END = object()  # not audio: the marker that wakes a reader whose channel has been replaced
-
-
 class Channel:
     """One direction of audio: blocks in, blocks out, and a cap that drops the oldest."""
 
-    def __init__(self, keep_seconds: float = KEEP_SECONDS) -> None:
-        # Counted in blocks rather than bytes: a block is whatever a reader last wrote, and every
-        # writer here writes far less than a second of audio at a time.
-        self._blocks: "queue.Queue[object]" = queue.Queue(
-            maxsize=max(1, int(keep_seconds))
-        )
+    def __init__(
+        self,
+        keep_seconds: float = KEEP_SECONDS,
+        bytes_per_second: int = INBOUND_RATE * SAMPLE_WIDTH * CHANNELS,
+    ) -> None:
+        # A cap in bytes, not in blocks: a block is whatever a writer handed over, so counting blocks
+        # made `KEEP_SECONDS` mean a different length of audio per direction -- twenty of the page's
+        # hundred-millisecond microphone blocks are two seconds, while two of them are a fifth of one.
+        self._keep = max(1, int(keep_seconds * bytes_per_second))
+        self._blocks: "deque[bytes]" = deque()
+        self._held = 0  # bytes waiting, so the cap is measured rather than counted
+        self._changed = threading.Condition()
         self._ended = threading.Event()
 
     def put(self, pcm: bytes) -> None:
-        """Add *pcm*, dropping the oldest block to make room when full.
+        """Add *pcm*, dropping the oldest blocks to make room when full.
 
         Dropping is the point: a reader that cannot keep up must not be handed a backlog it will
-        spend the next sentence working through. What goes is audio from before now.
+        spend the next sentence working through. What goes is audio from before now. The block
+        arriving is never dropped for being long, though -- a sentence handed over whole carries
+        words, and losing its start loses them.
         """
-        self._offer(pcm)
+        with self._changed:
+            self._blocks.append(pcm)
+            self._held += len(pcm)
+            while self._held > self._keep and len(self._blocks) > 1:
+                self._held -= len(self._blocks.popleft())
+            self._changed.notify()
 
     def take(self, timeout: float) -> bytes | None:
         """The next block, waiting up to *timeout*; None when nothing came or this channel ended."""
-        try:
-            block = self._blocks.get(timeout=timeout)
-        except queue.Empty:
-            return None
-        return block if isinstance(block, bytes) else None  # the end marker is not audio
+        deadline = time.monotonic() + timeout
+        with self._changed:
+            while not self._blocks:
+                if self._ended.is_set():
+                    return None
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return None
+                self._changed.wait(left)
+            pcm = self._blocks.popleft()
+            self._held -= len(pcm)
+            return pcm
 
     def close(self) -> None:
         """End this channel: a reader waiting in `take` wakes now, not at the end of its timeout.
@@ -95,8 +115,9 @@ class Channel:
         as its response ends -- so the end is the answer, and waiting out a fifteen-second read
         timeout is fifteen seconds of silence in the middle of a conversation.
         """
-        self._ended.set()  # before the marker, so a reader that wakes knows why it woke
-        self._offer(_END)
+        with self._changed:
+            self._ended.set()
+            self._changed.notify_all()
 
     @property
     def ended(self) -> bool:
@@ -105,37 +126,28 @@ class Channel:
 
     def clear(self) -> None:
         """Throw away what is waiting, so the next reader starts at now."""
-        while True:
-            try:
-                self._blocks.get_nowait()
-            except queue.Empty:
-                return
+        with self._changed:
+            self._blocks.clear()
+            self._held = 0
 
     def drain(self) -> list[bytes]:
         """Every block waiting, oldest first, leaving the channel empty."""
-        blocks = []
-        while True:
-            try:
-                block = self._blocks.get_nowait()
-            except queue.Empty:
-                return blocks
-            if block is not _END:
-                blocks.append(block)
-
-    def _offer(self, block: object) -> None:
-        """Add *block*, dropping the oldest to make room when full; see `put` for why."""
-        while True:
-            try:
-                self._blocks.put_nowait(block)
-                return
-            except queue.Full:
-                try:
-                    self._blocks.get_nowait()
-                except queue.Empty:  # another thread drained it first; the put can be retried
-                    pass
+        with self._changed:
+            blocks = list(self._blocks)
+            self._blocks.clear()
+            self._held = 0
+            return blocks
 
 
-_channels: dict[str, Channel] = {"in": Channel(), "out": Channel()}
+def _new_channel(rate: int) -> Channel:
+    """A channel holding `KEEP_SECONDS` of audio at *rate*."""
+    return Channel(bytes_per_second=rate * SAMPLE_WIDTH * CHANNELS)
+
+
+_channels: dict[str, Channel] = {
+    "in": _new_channel(INBOUND_RATE),
+    "out": _new_channel(DEFAULT_OUTBOUND_RATE),
+}
 _channels_lock = threading.Lock()
 # The rate the last sentence was made at, and the lock that makes reading and writing it one step.
 # None until zrb's speech has said something on this run.
@@ -178,7 +190,12 @@ def _swap_channel(direction: str) -> "Channel":
     reading it and swapping it.
     """
     previous = _channels[direction]
-    channel = Channel()
+    rate = (
+        INBOUND_RATE
+        if direction == "in"
+        else _outbound_format["rate"] or DEFAULT_OUTBOUND_RATE
+    )
+    channel = _new_channel(rate)
     for block in previous.drain():
         channel.put(block)
     _channels[direction] = channel
@@ -215,7 +232,7 @@ def put_outbound(pcm: bytes, rate: int) -> None:
             # stream is over, so it ends now and the page asks again -- for the rate this sentence
             # is being made at -- rather than after a read timeout with silence in between.
             previous = _channels["out"]
-            _channels["out"] = Channel()
+            _channels["out"] = _new_channel(rate)
             previous.close()
         _outbound_format["rate"] = rate
         if pcm:

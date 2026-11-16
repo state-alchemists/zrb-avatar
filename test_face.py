@@ -2227,6 +2227,24 @@ assert next_rate == 24000 and next_channel is not old_channel
 assert next_channel.take(1) == SAID  # carried over: the sentence made for the stream that asks
 assert old_channel.take(0.05) is None  # and the reader it replaced is left with nothing
 
+# The cap is a length of audio, not a number of blocks: the page sends a tenth of a second at a time,
+# and a count of blocks held a fifth of a second rather than the two seconds it promises -- so a
+# reader that lagged by 300 ms lost the words in the middle. Twenty of the page's blocks fit, and the
+# oldest goes when the next one arrives.
+block = b"\x00" * 3200  # 100 ms of 16 kHz mono 16-bit
+channel = server.audio.Channel()
+for _ in range(25):
+    channel.put(block)
+assert len(channel.drain()) == 20
+# A block bigger than the whole cap is not cut for being long -- it is a sentence somebody made --
+# so it is kept while it is alone, and leaves only when newer audio arrives behind it.
+channel = server.audio.Channel()
+channel.put(b"\x00" * 200_000)  # past two seconds of this format, handed over at once
+assert len(channel.drain()) == 1
+channel.put(b"\x00" * 200_000)
+channel.put(block)
+assert channel.drain() == [block]
+
 # And the reader is told the moment its stream is replaced, rather than at the end of its own read
 # timeout: the page asks again as soon as this response ends, so fifteen seconds of waiting here is
 # fifteen seconds of silence in the middle of a conversation.
