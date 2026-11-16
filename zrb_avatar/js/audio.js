@@ -186,6 +186,10 @@ export function createAudio({ onState } = {}) {
   // stopping released one microphone and the other went on capturing.
   let micStarting = false, micGeneration = 0;
   let earsContext = null, earsNode = null, earsAbort = null;
+  // The same for the speaker: a graph being opened is not a graph that will still be wanted when
+  // the module it loads answers. Stopping says which start is current, and a start that wakes up
+  // out of date builds nothing -- there is no node nobody holds, and so none to leave open.
+  let earsGeneration = 0;
 
   const changed = () => onState?.({ mic: listening, ears: hearing, error });
   // Said out loud rather than swallowed: a microphone the browser refused has to look like a
@@ -340,7 +344,7 @@ export function createAudio({ onState } = {}) {
   function contextNow() {
     const context = new AudioContext();
     context.resume().catch(e => {
-      if (!hearing) return; // already off: nothing to say about a graph nobody is using
+      if (earsContext !== context) return; // stopped, or replaced: not this graph's business
       stopEars();
       failed(`speaker: ${e.message || 'did not start'}`);
     });
@@ -352,7 +356,7 @@ export function createAudio({ onState } = {}) {
   // -- the resampling happens in the worklet, which is why the graph is the browser's own and a
   // second one is never made late. A later sentence at another rate only moves the step, so a rate
   // change is not a click; the stream itself ends when one happens (see hear) and is asked for again.
-  async function ears(rate) {
+  async function ears(rate, generation) {
     if (earsNode) {
       earsNode.port.postMessage({ step: rate / earsContext.sampleRate });
       return earsNode;
@@ -360,6 +364,11 @@ export function createAudio({ onState } = {}) {
     const context = earsContext;
     if (!context) return null; // stopped before the module was asked for: nothing to play into
     await context.audioWorklet.addModule((playUrl ??= workletUrl(PLAY)));
+    // Stopping is not something a pending load can undo. The graph above is that press's, and
+    // stopEars has closed it and cleared the field by now, so a node made here would be one nobody
+    // owns: never closed, still holding this device's audio session, and still fed the next
+    // sentence. Out of date, the answer is no node at all.
+    if (generation !== earsGeneration) return null;
     const node = new AudioWorkletNode(context, 'zrb-play', {
       processorOptions: {
         step: rate / context.sampleRate,
@@ -375,10 +384,10 @@ export function createAudio({ onState } = {}) {
 
   // One response, read to its end: a sentence made at a new rate ends it, and the next pass reads the
   // new rate out of the headers rather than playing that one at the old pitch.
-  async function hear(res) {
+  async function hear(res, generation) {
     const rate = Number(res.headers.get('X-Sample-Rate'));
     if (!Number.isFinite(rate) || rate <= 0) throw new Error('no sample rate on the out stream');
-    const node = await ears(rate);
+    const node = await ears(rate, generation);
     if (!node) return; // the press was taken back while the worklet was loading: nothing to read into
     const reader = res.body.getReader();
     let rest = new Uint8Array(0);
@@ -394,7 +403,7 @@ export function createAudio({ onState } = {}) {
 
   // The out stream, asked for again for as long as the ears are on. A failure is a second's pause and
   // another ask: the server may be restarting, and only stopEars ends this.
-  async function pump(signal) {
+  async function pump(signal, generation) {
     while (!signal.aborted) {
       try {
         const res = await fetch('/audio/out', { signal, cache: 'no-store' });
@@ -403,7 +412,7 @@ export function createAudio({ onState } = {}) {
           await wait(RETRY);
           continue;
         }
-        await hear(res);
+        await hear(res, generation);
       } catch (e) {
         if (signal.aborted) return;
         failed(`audio out: ${e.message || 'stopped'}`);
@@ -427,18 +436,21 @@ export function createAudio({ onState } = {}) {
     hearing = true;
     error = '';
     earsContext = context;
+    const generation = ++earsGeneration;
     earsAbort = new AbortController();
     changed();
     // Not awaited: it reads until stopEars aborts it. Caught all the same, so a page whose own
     // onState throws does not take the stream down with it.
-    pump(earsAbort.signal).catch(() => {});
+    pump(earsAbort.signal, generation).catch(() => {});
   }
 
   // Off: the response is one long read that only the page can end, so it is aborted, and the graph is
-  // closed a moment after it, since an idle one still holds this device's audio session.
+  // closed a moment after it, since an idle one still holds this device's audio session. The
+  // generation says the graph being closed is the one any pending start was opening.
   function stopEars() {
     if (!hearing) return;
     hearing = false;
+    earsGeneration++;
     earsAbort?.abort(); // one long response, and only the page can end it
     earsAbort = null;
     earsNode?.disconnect();
