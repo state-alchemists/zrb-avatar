@@ -205,7 +205,10 @@ def _resumes_conversation(context) -> bool:
 
 def face_hooks(hooks) -> None:
     """Register hooks that send idle/thinking/tool/attention/permission, and zrb's emotions, to the face."""
-    from zrb.llm.hook import HookEvent, HookResult
+    try:  # zrb 4.0 keeps the hook unit under capabilities/
+        from zrb.llm.capabilities.hook import HookEvent, HookResult
+    except ImportError:
+        from zrb.llm.hook import HookEvent, HookResult
 
     def unless_nested(hook):
         """*hook*, skipped for a run that another run started.

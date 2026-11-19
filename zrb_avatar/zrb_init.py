@@ -58,26 +58,52 @@ import time
 
 from zrb import CFG
 from zrb.builtin import llm_chat
-from zrb.llm.camera import CameraConfig
-from zrb.llm.camera.backend.builtin import get_camera_backend
-from zrb.llm.camera.feature import capture_photo
-# The hook package's parts moved under `contracts/`, and its front door has always re-exported
-# these names: name the package, not a module under it, so the next reshuffle is not our break.
-from zrb.llm.hook import HookContext, HookEvent, HookManager, HookResult
-# zrb moved its shared layer-0 leaves into `zrb.llm.shared`, and this plugin declares no minimum
-# zrb: read the layout that is here. The class is the same code in both spots, so which copy
-# answers changes nothing about the call.
+# zrb 4.0 sorted every unit under a layer directory -- `zrb.llm.presentation.camera`,
+# `zrb.llm.capabilities.hook`, `zrb.llm.contracts.shared` -- where before it a unit sat at the
+# top of `zrb.llm`: `zrb.llm.camera`, `zrb.llm.hook`. This plugin declares no minimum zrb, so
+# each group reads the layout that is here: the 4.0 path first, the older one only when that
+# import fails. The code behind both is the same, so which copy answers changes nothing about
+# the call.
+#
+# The hook package's front door has always re-exported these names: name the package, not a
+# module under it, so the next reshuffle inside the hook package is not our break.
 try:
-    from zrb.llm.shared.input_source import InputProvenance
-except ImportError:  # a zrb that predates the move keeps it at the top of zrb.llm
-    from zrb.llm.input_source import InputProvenance
-from zrb.llm.speech import SpeechConfig, enable_speech
-from zrb.llm.speech.backend.any_speech_backend import AnySpeechBackend
-from zrb.llm.speech.backend.audio import SpeechAudio
-from zrb.llm.speech.backend.builtin import get_speech_backend
-from zrb.llm.speech.player import is_speaking
-from zrb.llm.tool_call import auto_approve
-from zrb.llm.ui.trigger import TriggerInput
+    from zrb.llm.capabilities.hook import HookContext, HookEvent, HookManager, HookResult
+except ImportError:  # zrb < 4.0 keeps the hook unit at the top of zrb.llm
+    from zrb.llm.hook import HookContext, HookEvent, HookManager, HookResult
+try:
+    from zrb.llm.contracts.shared.input_source import InputProvenance
+except ImportError:
+    try:  # zrb 3.4x keeps the shared leaves under their own unit
+        from zrb.llm.shared.input_source import InputProvenance
+    except ImportError:  # anything older keeps it at the top of zrb.llm
+        from zrb.llm.input_source import InputProvenance
+try:
+    from zrb.llm.presentation.camera import CameraConfig
+    from zrb.llm.presentation.camera.backend.builtin import get_camera_backend
+    from zrb.llm.presentation.camera.feature import capture_photo
+except ImportError:  # zrb < 4.0 keeps the camera unit at the top of zrb.llm
+    from zrb.llm.camera import CameraConfig
+    from zrb.llm.camera.backend.builtin import get_camera_backend
+    from zrb.llm.camera.feature import capture_photo
+try:
+    from zrb.llm.presentation.speech import SpeechConfig, enable_speech
+    from zrb.llm.presentation.speech.backend.any_speech_backend import AnySpeechBackend
+    from zrb.llm.presentation.speech.backend.audio import SpeechAudio
+    from zrb.llm.presentation.speech.backend.builtin import get_speech_backend
+    from zrb.llm.presentation.speech.player import is_speaking
+except ImportError:  # zrb < 4.0 keeps the speech unit at the top of zrb.llm
+    from zrb.llm.speech import SpeechConfig, enable_speech
+    from zrb.llm.speech.backend.any_speech_backend import AnySpeechBackend
+    from zrb.llm.speech.backend.audio import SpeechAudio
+    from zrb.llm.speech.backend.builtin import get_speech_backend
+    from zrb.llm.speech.player import is_speaking
+try:
+    from zrb.llm.capabilities.tool_call import auto_approve
+    from zrb.llm.presentation.ui.trigger import TriggerInput
+except ImportError:  # zrb < 4.0 keeps both units at the top of zrb.llm
+    from zrb.llm.tool_call import auto_approve
+    from zrb.llm.ui.trigger import TriggerInput
 
 # zrb loads this file by path; from a source checkout the package isn't installed.
 # Appended, not prepended: installed, this folder is another venv's site-packages,
@@ -904,15 +930,19 @@ def AvatarModel(name: str) -> str:
 def _image_tool_return():
     """zrb's `create_image_tool_return`, from wherever this zrb keeps it.
 
-    zrb 3.30.0 moved it from `zrb.llm.agent.run` to `zrb.llm.tool`, and this plugin
-    declares no minimum zrb, so both layouts have to be read: the current one first,
-    the older one only when that import fails. The signature is the same in both, so
-    which copy answers changes nothing about the call.
+    zrb 3.30.0 moved it from `zrb.llm.agent.run` to `zrb.llm.tool`, and 4.0 moved every
+    unit under a layer directory, so it is `zrb.llm.capabilities.tool` now. This plugin
+    declares no minimum zrb, so every layout has to be read: the newest first, an older
+    one only when that import fails. The signature is the same in all of them, so which
+    copy answers changes nothing about the call.
     """
     try:
-        from zrb.llm.tool.multimodal_describe import create_image_tool_return
-    except ImportError:  # zrb < 3.30.0 keeps the same helper under agent.run
-        from zrb.llm.agent.run.multimodal_describe import create_image_tool_return
+        from zrb.llm.capabilities.tool.multimodal_describe import create_image_tool_return
+    except ImportError:
+        try:  # zrb 3.30 - 3.41 keeps the tool unit at the top of zrb.llm
+            from zrb.llm.tool.multimodal_describe import create_image_tool_return
+        except ImportError:  # zrb < 3.30.0 keeps the same helper under agent.run
+            from zrb.llm.agent.run.multimodal_describe import create_image_tool_return
     return create_image_tool_return
 
 
@@ -946,7 +976,10 @@ async def AvatarLook():
     )
     try:  # lazy: these load pydantic_ai; and an older zrb may not have them
         create_image_tool_return = _image_tool_return()
-        from zrb.llm.agent.types import BinaryContent
+        try:  # zrb 4.0 keeps the engine's own types with the engine
+            from zrb.llm.engine.agent.types import BinaryContent
+        except ImportError:
+            from zrb.llm.agent.types import BinaryContent
     except ImportError as error:
         # The cause is named, not swallowed: a helper that moved inside zrb must read
         # as a broken import here, not as zrb being unable to show a picture.
