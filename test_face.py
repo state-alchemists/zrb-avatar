@@ -1466,6 +1466,7 @@ assert "removeItem(BOOT_FAILURES)" in page and "removeItem(CONTEXT_FAILURES)" in
 # And the message has to survive the page that keeps running: a state, camera or connection event
 # arriving after the retries are spent would paint "idle" under a black window, which reads as working.
 assert "drawFailure" in page, "nothing stops a status event from replacing a drawing failure"
+assert "setAnimationLoop(null)" in page, "the loop keeps rendering into a context that is gone"
 assert page.count("statusEl.textContent = ") == 2, (
     "only setStatus and failToDraw may write the line; every other writer goes through the latch"
 )

@@ -23,6 +23,7 @@ const FPS = Number(params.get('fps')) || 30;
 if (params.has('app')) document.documentElement.classList.add('app');
 const statusEl = document.getElementById('status');
 let frame = () => {}; // set once the model is loaded
+let renderer; // made below; declared here so failToDraw can reach it, even when making it threw
 
 // What the page says when it cannot draw her. "loading…" is the line's own text, and a page that
 // never replaces it says nothing at all: a GPU that a sleep or a driver reset took away leaves the
@@ -47,13 +48,15 @@ function setStatusLine(text, isError = false) {
   statusEl.classList.toggle('error', !!isError);
 }
 function failToDraw(reason, failuresIn) {
+  // Latched at once, not when the retries run out: from here the line is the failure, and a state,
+  // camera or connection event arriving in the three seconds before the reload must not paint over
+  // it — a black window reading "idle" looks like a page that works.
+  drawFailure = reason;
+  frame = () => {}; // nothing to draw into
+  renderer?.setAnimationLoop(null); // nor a loop to draw with: this is the one that kept rendering
+  events?.close(); // nor events to replace the line with her state
   const failures = Number(sessionStorage.getItem(failuresIn) || '0');
   const retry = failures < 2;
-  if (!retry) {
-    drawFailure = reason; // latched for the life of the page: only a reload gets her back
-    frame = () => {}; // nothing to draw into, so stop asking for frames
-    events?.close(); // and the events that would keep replacing the line with her state
-  }
   statusEl.textContent = `can't draw her: ${reason}${retry ? ' — reloading' : ' — reload the page to try again'}`;
   statusEl.classList.add('error');
   if (!retry) return;
@@ -61,7 +64,6 @@ function failToDraw(reason, failuresIn) {
   setTimeout(() => location.reload(), 3000);
 }
 
-let renderer;
 try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 } catch (error) {
