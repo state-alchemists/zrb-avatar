@@ -1592,10 +1592,11 @@ assert "if (!error && loading) return;" in page, "the camera's names paint over 
 # cleared `loading`, so the next state event would put "idle" on the line a moment later and the page
 # would look like it changed her. The reason is kept until another writer takes the line.
 assert "let loadError = null;" in page, "a failed model swap is replaced by the next state event"
-assert "if (text !== loadError) loadError = null;" in page, "a kept load error is never let go"
+assert "if (loadError && !isError) return;" in page, "a kept load error is let go by a camera or state event"
+assert page.count("loadError = null") == 2, "a load that worked does not clear the reason a load did not"
 assert "loadError = `can't load ${name}.vrm:" in page, "a failed swap is written without being kept"
-assert page.count("if (ticket === showing)") == 2, (
-    "a load a newer one replaced can still speak: its failure would describe the model on screen"
+assert page.count("if (ticket === showing)") == 3, (
+    "a load a newer one replaced can still speak, or a load that worked does not clear the reason"
 )
 assert page.count("statusEl.textContent = ") == 2, (
     "only setStatus and giveUp may write the line; every other writer goes through the latch"

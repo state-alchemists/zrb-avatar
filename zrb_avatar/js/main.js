@@ -54,7 +54,11 @@ let loadError = null;
 let events = null; // the server's, see connect(); declared here because giveUp is called before connect() runs
 function setStatusLine(text, isError = false) {
   if (failure) return;
-  if (text !== loadError) loadError = null; // another writer has taken the line
+  // A load that failed keeps the line until a load works: the camera publishes its names on the way up
+  // and a state event arrives at any moment, and either one would erase the reason while the old model
+  // is still the one on screen. A later failure is the newest thing known, and takes the line.
+  if (loadError && !isError) return;
+  if (isError) loadError = text;
   statusEl.textContent = text;
   statusEl.classList.toggle('error', !!isError);
 }
@@ -276,7 +280,13 @@ async function show(name) {
   const ticket = ++showing;
   loading = name;
   try {
-    return await showModel(name, ticket);
+    const shown = await showModel(name, ticket);
+    // A load that worked replaces the reason a load did not, and the line goes back to her state.
+    if (ticket === showing) {
+      loadError = null;
+      setStatusLine(state);
+    }
+    return shown;
   } catch (error) {
     // A loss only speaks for the load it came from: a newer load that has already put someone on
     // screen must not be described by the failure of the one it replaced.
