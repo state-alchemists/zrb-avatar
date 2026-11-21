@@ -1560,6 +1560,26 @@ typed_js = (server.HERE / "js" / "typed.js").read_text()
 assert "fetch('/text'" in typed_js, (
     "the page's text box sends nothing to the server"
 )
+# The route has one name in two packages, so it is compared rather than copied. zrb declares
+# `TYPED_PATH`; this server dispatches on a literal of its own; a rename on either side reaches
+# the page as a 404 that the reader treats as "no text box here" -- the same silence as a zrb
+# with no reader installed, so it is exactly the kind of fault that fails quietly. zrb arrives
+# here through the `zrb` extra, and the comparison is skipped out loud when the installed zrb is
+# older than the typed reader, since then there is nothing to ask.
+pinned_typed_in = "/text/in"
+assert f'if path == "{pinned_typed_in}":' in (server.HERE / "server.py").read_text(), (
+    "the server answers a route this test does not know, so the page's box has no name left"
+)
+try:  # zrb 4.0 keeps the face server's contract here; earlier zrb has no typed reader
+    from zrb.llm.contracts.util.face_server import TYPED_PATH
+except ImportError:
+    TYPED_PATH = None
+    print("skipped: the installed zrb has no typed reader, so its route cannot be compared")
+if TYPED_PATH is not None:
+    assert TYPED_PATH == pinned_typed_in, (
+        f"zrb reads {TYPED_PATH!r} and this server serves {pinned_typed_in!r}: "
+        "the page's text box reaches a route nobody answers"
+    )
 # Typing a letter is not pressing a key: an `m` in a sentence must not start the microphone, and a `c`
 # must not ask for the camera. The box's own keys are stopped before the page's key handlers run.
 assert "closest('input, textarea')" in page, "a letter typed in the box also presses a key"
