@@ -1463,6 +1463,12 @@ assert "failToDraw(" in page, "nothing puts a drawing failure on the status line
 # would be cleared by the next load, and a GPU resetting every minute would reload for ever.
 assert "CONTEXT_FAILURES" in page and "BOOT_FAILURES" in page
 assert "removeItem(BOOT_FAILURES)" in page and "removeItem(CONTEXT_FAILURES)" in page
+# And the message has to survive the page that keeps running: a state, camera or connection event
+# arriving after the retries are spent would paint "idle" under a black window, which reads as working.
+assert "drawFailure" in page, "nothing stops a status event from replacing a drawing failure"
+assert page.count("statusEl.textContent = ") == 2, (
+    "only setStatus and failToDraw may write the line; every other writer goes through the latch"
+)
 
 # Every name AvatarPose (zrb_init.py) offers is one the page (js/pose.js) knows.
 tools = (server.HERE / "zrb_init.py").read_text()

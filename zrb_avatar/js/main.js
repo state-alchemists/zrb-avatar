@@ -22,6 +22,7 @@ const params = new URLSearchParams(location.search);
 const FPS = Number(params.get('fps')) || 30;
 if (params.has('app')) document.documentElement.classList.add('app');
 const statusEl = document.getElementById('status');
+let frame = () => {}; // set once the model is loaded
 
 // What the page says when it cannot draw her. "loading…" is the line's own text, and a page that
 // never replaces it says nothing at all: a GPU that a sleep or a driver reset took away leaves the
@@ -35,9 +36,24 @@ const statusEl = document.getElementById('status');
 const BOOT_FAILURES = 'zrb-avatar-boot-failures';
 const CONTEXT_FAILURES = 'zrb-avatar-context-failures';
 const STABLE_MS = 60000; // a page that has drawn this long has a GPU again
+// Set once the retries are spent: the message is then the whole of what this page can say, and a
+// state, camera or connection event arriving afterwards must not paint over it — a black window with
+// "idle" under it looks like a page that is working.
+let drawFailure = null;
+let events = null; // the server's, see connect(); declared here because failToDraw is called before connect() runs
+function setStatusLine(text, isError = false) {
+  if (drawFailure) return;
+  statusEl.textContent = text;
+  statusEl.classList.toggle('error', !!isError);
+}
 function failToDraw(reason, failuresIn) {
   const failures = Number(sessionStorage.getItem(failuresIn) || '0');
   const retry = failures < 2;
+  if (!retry) {
+    drawFailure = reason; // latched for the life of the page: only a reload gets her back
+    frame = () => {}; // nothing to draw into, so stop asking for frames
+    events?.close(); // and the events that would keep replacing the line with her state
+  }
   statusEl.textContent = `can't draw her: ${reason}${retry ? ' — reloading' : ' — reload the page to try again'}`;
   statusEl.classList.add('error');
   if (!retry) return;
@@ -69,7 +85,6 @@ light.position.set(0, 1, 1);
 scene.add(light);
 const camera = new THREE.PerspectiveCamera(20, 1, 0.1, 20);
 
-let frame = () => {}; // set once the model is loaded
 function resize() {
   // again on every resize: page zoom and moving to another display change devicePixelRatio, and a
   // stale one draws her blurry, stretched. Sharper than 2x is invisible at this size.
@@ -93,7 +108,6 @@ function withParams() { return `?${params}`.replace(/=(?=&|$)/g, ''); }
 let state = 'idle', music = false, shy = false;
 let autonomy = { dance: false, blush: true, emotion: true, greeting: true }; // the server's defaults: only dance starts off, so a talk video does not make her dance
 let her = null; // the model on screen and everything bound to it, see show()
-let events = null; // the server's, see connect()
 // Which view this page is up to. The server takes the newer of two events rather than the one that
 // happened to arrive last, and `run` says a reloaded page outranks everything the last one said.
 const viewRun = Math.random().toString(36).slice(2);
@@ -107,7 +121,7 @@ function setState(value) {
   if (value === 'idle' && (state === 'thinking' || state === 'tool')) her?.expression.smileSoon(); // done: a smile
   state = LOOK[value] ? value : 'idle';
   document.documentElement.style.setProperty('--glow', LOOK[state]);
-  statusEl.textContent = state;
+  setStatusLine(state);
   followState();
 }
 
@@ -122,8 +136,7 @@ const audio = createAudio({
   // the hint changes with it — `m talk and listen`, then `m stop` — because a press that leaves
   // nothing looking different is a page that seems not to have heard the press.
   onState: ({ mic, error }) => {
-    statusEl.textContent = error || state;
-    statusEl.classList.toggle('error', !!error);
+    setStatusLine(error || state, !!error);
     if (micKey) micKey.textContent = error ? 'refused' : mic ? 'stop' : 'talk and listen';
   },
 });
@@ -135,8 +148,7 @@ window.audio = audio; // for a transcript page and for devtools, as window.face 
 const pageCamera = createCamera({
   page: pageId, // the name its report carries, so zrb can ask this page and not the other one
   onState: ({ names, error }) => {
-    statusEl.textContent = error || (names.length ? `camera: ${names.join(', ')}` : state);
-    statusEl.classList.toggle('error', !!error);
+    setStatusLine(error || (names.length ? `camera: ${names.join(', ')}` : state), !!error);
   },
 });
 pageCamera.publish();
@@ -212,10 +224,10 @@ const asked = params.get('model');
 const chosen = await fetch('model').then(r => r.json()).then(m => m.chosen).catch(() => null);
 const model = asked || chosen || (await fetch('models').then(r => r.json()).catch(() => []))[0];
 if (!model || !await show(model)) {  // say so, even in the app, instead of showing nothing
-  statusEl.textContent = model ? `can't load ${model}.vrm from the models folder` : 'no .vrm in the models folder';
-  statusEl.classList.add('error');
+  const said = model ? `can't load ${model}.vrm from the models folder` : 'no .vrm in the models folder';
+  setStatusLine(said, true);
   setTimeout(() => location.reload(), 5000);  // try again: the file or the server may be fixed meanwhile
-  throw new Error(statusEl.textContent);
+  throw new Error(said);
 }
 addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
 // M is the microphone, and with it her voice out of the speaker: one gesture is what a browser asks
@@ -402,7 +414,7 @@ function connect(name) {
   let lost = false;
   events = new EventSource(`events?model=${encodeURIComponent(name)}&page=${encodeURIComponent(pageId)}`);
   events.onmessage = onEvent;
-  events.onerror = () => { lost = true; statusEl.textContent = 'disconnected'; };
+  events.onerror = () => { lost = true; setStatusLine('disconnected'); };
   events.onopen = () => { if (lost) location.reload(); };
 }
 
