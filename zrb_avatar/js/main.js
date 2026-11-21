@@ -147,43 +147,99 @@ const animations = loadAnimations(loader); // once, for every model this page sh
 const MB = 1024 * 1024;
 const inMB = bytes => (bytes / MB).toFixed(1);
 const STALL_MS = 15000; // no bytes for this long is a stall, not a slow line
+const STALL_TRIES = 6; // and each stall asks for the bytes that did not arrive, not the file again
+
+// A phone that dims its screen stops the download with it — measured here on 2026-11-21: six of
+// eighteen megabytes and then nothing, with no error the page could see. The screen is kept on while
+// a model is on its way, and the tries below are what happens when it goes off anyway.
+let wakeLock = null, keepsAwake = false;
+async function askAwake() {
+  if (!keepsAwake || document.visibilityState !== 'visible' || !navigator.wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+  } catch {
+    wakeLock = null; // a browser that will not hold it is a browser whose page still loads
+  }
+}
+// The system takes the lock away the moment the page is hidden, so it is asked for again on return.
+async function wakeUp() {
+  keepsAwake = true;
+  addEventListener('visibilitychange', askAwake);
+  await askAwake();
+}
+function sleepAgain() {
+  keepsAwake = false;
+  removeEventListener('visibilitychange', askAwake);
+  const held = wakeLock;
+  wakeLock = null;
+  Promise.resolve(held?.release()).catch(() => {});
+}
+// The bytes of `url`, asking for the rest each time the link goes quiet. A stall is not an error:
+// the fetch has not failed, it has stopped moving, and what already arrived is worth keeping.
 async function fetchBytes(url, say) {
-  const res = await fetch(url);
+  const whole = { pieces: [], got: 0, total: 0 };
+  for (let tries = 0; tries < STALL_TRIES; tries++) {
+    if (await readAttempt(url, whole, say)) return joined(whole);
+  }
+  throw new Error(`the download stalled at ${inMB(whole.got)}${whole.total ? ` of ${inMB(whole.total)}` : ''} MB`);
+}
+// One go at the rest of the file, from what `whole` already holds. True when the body ended.
+async function readAttempt(url, whole, say) {
+  const from = whole.got;
+  const res = await fetch(url, from ? { headers: { Range: `bytes=${from}-` } } : undefined);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText || 'refused'}`);
-  const total = Number(res.headers.get('Content-Length')) || 0;
-  if (!res.body) return res.arrayBuffer(); // no streaming here: one piece, however long it takes
-  const pieces = [], reader = res.body.getReader();
-  let got = 0, timer, timedOut = false;
-  // A download that stops moving does not end by itself: the fetch sits there, no error reaches the
-  // page, and the line keeps a number that will never change. That is the one failure a reader cannot
-  // tell from a slow link — measured on a phone, 2026-11-21: the size arrived, not one byte did, and
-  // the page waited. So the wire is timed here rather than trusted to the browser.
-  //
-  // The timer cancels the reader and *throws after the loop*, rather than racing a rejection against
-  // `read()`: a cancel makes `read()` resolve `done`, which settles a race first and hands the parse
-  // a truncated file — the reader then blames the file for what the link did.
+  // A server that cannot resume answers with the whole file, so this attempt starts over rather than
+  // appending the beginning of the file to the end of the part already held.
+  if (from && res.status !== 206) {
+    whole.pieces = [];
+    whole.got = 0;
+  }
+  const length = Number(res.headers.get('Content-Length')) || 0;
+  whole.total = from && res.status === 206 ? from + length : length;
+  say(whole.got, whole.total); // the size the moment it is known: "0.0 of 18.0" is a page that has begun
+  if (!res.body) return onePiece(res, whole, say); // no streaming here: one piece, however long it takes
+  return drain(res, whole, say);
+}
+// The body, piece by piece, ending when it ends or when it goes quiet.
+//
+// A download that stops moving does not end by itself: the fetch sits there, no error reaches the
+// page, and the line keeps a number that will never change — measured on a phone, 2026-11-21: the
+// size arrived, not one byte did, and the page waited. So the wire is timed here rather than trusted
+// to the browser. The timer cancels the reader and the answer is read after the loop, rather than
+// racing a rejection against `read()`: a cancel makes `read()` resolve `done`, which settles a race
+// first and hands the parse a truncated file — the reader then blames the file for what the link did.
+async function drain(res, whole, say) {
+  const reader = res.body.getReader();
+  let timer, quiet = false;
   const arm = () => {
     clearTimeout(timer);
     timer = setTimeout(() => {
-      timedOut = true;
+      quiet = true;
       reader.cancel().catch(() => {}); // this is what wakes the pending read below
     }, STALL_MS);
   };
-  say(0, total); // the size the moment it is known: "0.0 of 18.0" is a page that has begun
   arm();
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      arm(); // every piece that arrives is the link saying it is still there
       if (done) break;
-      pieces.push(value);
-      say(got += value.byteLength, total);
+      arm(); // every piece that arrives is the link saying it is still there
+      whole.pieces.push(value);
+      say(whole.got += value.byteLength, whole.total);
     }
   } finally {
     clearTimeout(timer);
   }
-  if (timedOut) throw new Error(`the download stalled at ${inMB(got)}${total ? ` of ${inMB(total)}` : ''} MB`);
-  // One buffer, in the order the pieces came, which is the order a body is delivered in.
+  return !quiet && (!whole.total || whole.got >= whole.total);
+}
+async function onePiece(res, whole, say) {
+  const piece = new Uint8Array(await res.arrayBuffer());
+  whole.pieces.push(piece);
+  say(whole.got += piece.byteLength, whole.total);
+  return !whole.total || whole.got >= whole.total;
+}
+// One buffer, in the order the pieces came, which is the order a body is delivered in.
+function joined({ pieces, got }) {
   const bytes = new Uint8Array(got);
   let at = 0;
   for (const piece of pieces) { bytes.set(piece, at); at += piece.byteLength; }
@@ -194,12 +250,17 @@ async function fetchBytes(url, say) {
 // thrown with its reason rather than swallowed: a reader needs to know whether the file never
 // arrived, or arrived and could not be drawn, because only one of those is about the network.
 async function loadVRM(name) {
-  const bytes = await fetchBytes(`${encodeURIComponent(name)}.vrm`,
-    (got, total) => setStatusLine(`loading ${name}: ${inMB(got)}${total ? ` of ${inMB(total)}` : ''} MB`));
-  setStatusLine(`loading ${name}: drawing…`);
-  const vrm = (await loader.parseAsync(bytes, '')).userData.vrm;
-  if (!vrm) throw new Error('it is not a VRM');
-  return vrm;
+  await wakeUp(); // the screen goes off and the download goes with it; see wakeUp above
+  try {
+    const bytes = await fetchBytes(`${encodeURIComponent(name)}.vrm`,
+      (got, total) => setStatusLine(`loading ${name}: ${inMB(got)}${total ? ` of ${inMB(total)}` : ''} MB`));
+    setStatusLine(`loading ${name}: drawing…`);
+    const vrm = (await loader.parseAsync(bytes, '')).userData.vrm;
+    if (!vrm) throw new Error('it is not a VRM');
+    return vrm;
+  } finally {
+    sleepAgain();
+  }
 }
 
 // Her notes, beside her model: {"covers": ["chest", ...]} says what her outfit covers. A model

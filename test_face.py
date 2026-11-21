@@ -416,6 +416,28 @@ assert (
 )  # hers added to ours
 assert "rest" in pools["idle"]
 assert get("/mine.vrm") == (200, b"mine")
+# A phone that lost its link at six of eighteen megabytes asks for the rest: the model route answers
+# a byte range with 206 and the whole size it belongs to, so a stalled download resumes instead of
+# starting the file again. A range it cannot serve is the whole file, which is always a correct
+# answer to the question.
+def get_range(path: str, asked: str | None = None) -> tuple[int, dict[str, str], bytes]:
+    client.request("GET", path, headers={"Range": asked} if asked else {})
+    response = client.getresponse()
+    return response.status, dict(response.getheaders()), response.read()
+
+
+status, headers, body = get_range("/mine.vrm", "bytes=2-")
+assert (status, body) == (206, b"ne"), "a range is answered with something other than the rest"
+assert (
+    headers.get("Content-Range") == "bytes 2-3/4"
+), "a resumed answer does not say which part of the file it is"
+status, _, body = get_range("/mine.vrm", "bytes=0-1")
+assert (status, body) == (206, b"mi"), "a bounded range is not the bytes it names"
+status, _, body = get_range("/mine.vrm", "bytes=9-")
+assert (status, body) == (200, b"mine"), "a range past the end is not the whole file"
+assert (
+    get_range("/mine.vrm")[1].get("Accept-Ranges") == "bytes"
+), "a page is never told it may resume"
 
 # Her notes live beside her model: {"covers": [...]} in <name>.json says what her outfit covers,
 # so a close look at a hoodie is no longer read the same way as one at bare skin. A model with no
@@ -1642,6 +1664,14 @@ assert "loading ${name}:" in page, "nothing counts her model as it arrives"
 # the page waited. So the wire is timed, and a stall has a sentence of its own.
 assert "STALL_MS" in page, "a stalled download sits at a number that will never change"
 assert "the download stalled at" in page, "a stall says nothing a reader can act on"
+# And a stall is not the end of the load: the phone's screen went off at six of eighteen megabytes
+# and every try after it asked for the file from the start, so a reload began the minute again. The
+# rest is asked for, and the screen is held on while a model is on its way.
+assert "STALL_TRIES" in page, "one stall ends a download that a phone could have finished"
+assert "Range: `bytes=${from}-`" in page, "a resumed download asks for the whole file again"
+assert "res.status !== 206" in page, "a page appends the whole file to the part it already has"
+assert "navigator.wakeLock" in page, "the screen goes off and the download goes with it"
+assert "sleepAgain();" in page, "the screen is held on after the model arrived"
 # And the line belongs to the load while a load is in flight: the camera publishes its names on the way
 # up and a state event can paint "idle" over a number that is still counting, which is what made the
 # phone's working page and broken page look the same. Measured, not guessed — the first version of the
