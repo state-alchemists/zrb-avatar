@@ -277,6 +277,14 @@ async function show(name) {
   loading = name;
   try {
     return await showModel(name, ticket);
+  } catch (error) {
+    // A loss only speaks for the load it came from: a newer load that has already put someone on
+    // screen must not be described by the failure of the one it replaced.
+    if (ticket === showing) {
+      loadError = `can't load ${name}.vrm: ${reasonOf(error)}`; // and setState leaves it alone
+      setStatusLine(loadError, true);
+    }
+    throw error;
   } finally {
     if (ticket === showing) loading = null;
   }
@@ -529,10 +537,7 @@ function onEvent({ data }) {
     fetch('models').then(r => r.json())
       .then(names => {
         if (!names.includes(msg.value)) return;
-        show(msg.value).catch(error => {
-          loadError = `can't load ${msg.value}.vrm: ${reasonOf(error)}`; // and setState leaves it alone
-          setStatusLine(loadError, true);
-        });
+        show(msg.value).catch(() => {});  // show() has already said why, if it is still the load that counts
       })
       .catch(() => {});
   } else if (msg.type === 'pose') {
