@@ -1017,6 +1017,20 @@ try:
 finally:
     server._snapshots.pop("waiting")
 
+# And a body that stops short of the length it declared is not a message: the part that arrived put to
+# zrb as a typed line would be a truncated sentence, and the page would believe it had been sent.
+def post_truncated(path: str, declared: int, sent: bytes) -> int:
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+        raw.sendall(f"POST {path} HTTP/1.1\r\nHost: x\r\nContent-Length: {declared}\r\n\r\n".encode() + sent)
+        raw.shutdown(socket.SHUT_WR)  # the page went away in the middle of the line
+        answer = b""
+        while chunk := raw.recv(4096):
+            answer += chunk
+        return int(answer.split()[1])
+
+
+assert post_truncated("/text", 40, b"only this much") == 400, "a cut-off body became a message"
+
 # AvatarLook's picture: GET /snapshot asks the open window, which answers with a PNG and what she
 # is doing; a made-up id, a non-PNG or an oversized answer is refused.
 import base64  # noqa: E402
@@ -1464,7 +1478,8 @@ assert "new KeyboardEvent('keydown'" in page, "the buttons do not reach the key 
 # keyboard in the room, so a line typed on the page has to reach zrb as a turn the way a spoken one
 # does. The server frames and cuts it (typed.py); the page sends it to POST /text.
 assert 'id="typed"' in page_html, "a phone has no keypad, and the page gives it nowhere to type"
-assert "fetch('/text'" in (server.HERE / "js" / "typed.js").read_text(), (
+typed_js = (server.HERE / "js" / "typed.js").read_text()
+assert "fetch('/text'" in typed_js, (
     "the page's text box sends nothing to the server"
 )
 # Typing a letter is not pressing a key: an `m` in a sentence must not start the microphone, and a `c`
@@ -1473,6 +1488,19 @@ assert "closest('input, textarea')" in page, "a letter typed in the box also pre
 assert "interactive-widget=resizes-content" in page_html, (
     "the phone's own keyboard covers the box that was tapped"
 )
+# And the view was keyboard-only as well: no arrows and no wheel on a phone, so a page that would not
+# turn. One finger orbits her and two pinch her, in the keys' own steps -- one view, two ways to move it.
+framing = (server.HERE / "js" / "framing.js").read_text()
+assert "canvasEl.addEventListener('pointerdown'" in page, "nothing starts a drag on her"
+assert "onPointerMove" in page and "onPointerMove" in framing, "a drag moves nothing"
+assert "view.yaw += (e.clientX - was.x)" in framing, "a drag across her does not turn her"
+assert "view.zoom *= now / apart" in framing, "a pinch resizes nothing"
+# A drag that is still going has to push the settle back, as holding a key does: zrb is told the view
+# once it settles, and a notice sent only at the start would hand it the angle the finger passed through.
+assert "if (her.framing.onPointerMove(e)) her.view.notice();" in page, (
+    "a drag tells zrb the view it started at, not the one it ended on"
+)
+assert "touch-action: none" in page_html, "the browser takes the drag for a scroll of the page"
 # The camera's hint says what the press did. `c` hands the camera back on purpose — the grant is what
 # it is for — so a label that still reads "allow this camera" after it was allowed hides the answer.
 assert 'id="camera"' in page_html and 'getElementById(\'camera\')' in page, (
@@ -1495,6 +1523,34 @@ assert typed.put_line("still a question") is True
 right = typed.start_reading()
 assert left.ended and not right.ended, "a replaced reader keeps its route open"
 assert right.take(0) == "still a question", "what was typed before the reader changed was lost"
+# A page must not be told its line arrived when nothing will read it: the route counts the reader that
+# holds it, and stops counting when that reader leaves — a reader that had already been replaced does
+# not turn off the flag for the one that replaced it.
+assert typed.reader_attached(), "a reader holding the route is not counted"
+typed.stop_reading(left)  # replaced a moment ago, so not the reader the box should be refused for
+assert typed.reader_attached(), "a reader that had already gone turned off the flag for the one there"
+typed.stop_reading(right)
+assert not typed.reader_attached(), "nothing reads the box, and a line is still accepted for it"
+# And a queue nobody drains does not grow for ever: past MAX_WAITING a line is refused rather than
+# dropped, so the page can keep the words instead of believing they were sent.
+# A line a relay has taken but not written goes back to whoever holds the route now: the gap between
+# the take and the write is where a reconnect happens, and a message typed into one is still a message.
+assert typed.put_line("taken but not written") is True
+hand = typed.start_reading()
+assert hand.take(0) == "taken but not written"  # the relay has it in hand
+newer = typed.start_reading()  # and zrb reconnected before it could write it
+typed.unsend("taken but not written")
+assert newer.take(0) == "taken but not written", "a line in a replaced reader's hand was lost"
+typed.unsend("")  # a keepalive tick, which is not a line
+assert newer.take(0.05) == "", "a keepalive tick came back as an empty message"
+for i in range(typed.MAX_WAITING):
+    assert typed.put_line(f"line {i}") is True
+try:
+    typed.put_line("one too many")
+    assert False, "a line was dropped for a reader that was not taking them, and the page was told it arrived"
+except typed.ChannelFull:
+    pass
+assert "nothing is reading the box yet" in typed_js, "a refused line says nothing a person can act on"
 
 # A page that cannot draw her says so rather than sitting on the status line's own "loading…" for
 # ever: a GPU a sleep took away leaves the window black and the line unchanged, and the line is the
@@ -1536,8 +1592,12 @@ assert "if (!error && loading) return;" in page, "the camera's names paint over 
 # cleared `loading`, so the next state event would put "idle" on the line a moment later and the page
 # would look like it changed her. The reason is kept until another writer takes the line.
 assert "let loadError = null;" in page, "a failed model swap is replaced by the next state event"
-assert "if (text !== loadError) loadError = null;" in page, "a kept load error is never let go"
-assert "loadError = `can't load ${msg.value}.vrm:" in page, "a failed swap is written without being kept"
+assert "if (loadError && !isError) return;" in page, "a kept load error is let go by a camera or state event"
+assert page.count("loadError = null") == 2, "a load that worked does not clear the reason a load did not"
+assert "loadError = `can't load ${name}.vrm:" in page, "a failed swap is written without being kept"
+assert page.count("if (ticket === showing)") == 3, (
+    "a load a newer one replaced can still speak, or a load that worked does not clear the reason"
+)
 assert page.count("statusEl.textContent = ") == 2, (
     "only setStatus and giveUp may write the line; every other writer goes through the latch"
 )

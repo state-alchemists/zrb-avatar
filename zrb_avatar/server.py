@@ -73,7 +73,9 @@ import platform
 import queue
 import re
 import secrets
+import select
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -176,6 +178,20 @@ TOKEN = env_get("TOKEN")
 def _on(variable: str) -> bool:
     """Whether an env var says yes. Unset, empty, or a word that means no all say no."""
     return os.getenv(variable, "").strip().lower() not in ("", "0", "off", "no", "false")
+
+
+def _peer_closed(connection: socket.socket) -> bool:
+    """Whether the far end has closed its side of *connection*.
+
+    A closed socket reads as ready with nothing in it. Asking is what makes a reader that has gone
+    count as gone at the next keepalive: waiting for a write to fail took two of them, and until then
+    the page was told its lines were being read by nobody.
+    """
+    try:
+        readable, _, _ = select.select([connection], [], [], 0)
+        return bool(readable) and not connection.recv(1, socket.MSG_PEEK)
+    except (OSError, ValueError):  # closed under us, or no longer a socket
+        return True
 
 
 # Her body answers, on its own, a look that has become one she has said no to. It rides the round
@@ -1693,21 +1709,51 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
+    def _read_exactly(self, size: int) -> bytes | None:
+        """Exactly *size* bytes, or None when the body stopped short of what it declared.
+
+        A request that says one length and sends less is a page that went away in the middle of a
+        line. Half a message is not a message: putting the part that arrived to zrb would hand the
+        chat a truncated sentence as though it had been typed whole.
+        """
+        body = b""
+        while len(body) < size:
+            block = self.rfile.read(size - len(body))
+            if not block:
+                return None
+            body += block
+        return body
+
     def _take_text(self):
         """One line typed on the page, for zrb's next turn.
 
         A typed line is measured, not streamed: the page knows what it sent, and a body that says
         otherwise is refused rather than read until the client hangs up. UTF-8 only — a line that is
         not is a page to fix, not a message to guess at.
+
+        Refused with a 503 when nobody holds ``/text/in``: a page told its line arrived is worse off
+        than one that keeps it, because the words are still in the box to send again.
         """
         size = self._length(typed.MAX_BODY_BYTES)
         if size is None:
             return
+        body = self._read_exactly(size)
+        if body is None:
+            return self.send_error(400, "the typed line stopped short")
         try:
-            line = self.rfile.read(size).decode("utf-8")
+            line = body.decode("utf-8")
         except UnicodeDecodeError:
             return self.send_error(400, "a typed line is UTF-8")
-        if not typed.put_line(line):
+        if not typed.reader_attached():
+            # Nobody holds /text/in: zrb without the reader in it, or a chat that is not running. Said
+            # rather than queued, because a page told its line arrived is worse off than one that keeps
+            # it -- the box puts the words back and Enter sends them again once something is reading.
+            return self.send_error(503, "nothing is reading this page's text box")
+        try:
+            accepted = typed.put_line(line)
+        except typed.ChannelFull:
+            return self.send_error(503, "the chat is not taking typed lines")
+        if not accepted:
             return self.send_error(400, "nothing was typed")
         self.send_response(204)
         self.end_headers()
@@ -1759,15 +1805,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
+        line = ""
         try:
             while not channel.ended:
                 line = channel.take(typed.KEEPALIVE_SECONDS)
-                if channel.ended:
-                    return  # a newer reader has it: this response is over
+                if channel.ended or _peer_closed(self.connection):
+                    # A newer reader has it, or this one has gone. Either way a line already taken
+                    # goes back rather than out with the response: a reconnect is not a reason to
+                    # lose what was said into it.
+                    typed.unsend(line)
+                    return
                 self.wfile.write(line.encode() + b"\n")
                 self.wfile.flush()
         except OSError:  # the far end closed: nothing left to say, and nobody to say it to
-            pass
+            typed.unsend(line)  # the write that failed carried a line with it
+        finally:
+            typed.stop_reading(channel)  # zrb has stopped listening, and the box is told so
 
     def _stream(self):
         self.send_response(200)

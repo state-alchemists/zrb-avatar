@@ -11,6 +11,9 @@
   html.app, html.app body { background: transparent; }
   canvas {
     display: block;
+    /* A drag on her is a gesture of the page's, not the browser's: without this it would scroll or
+       zoom the page under her instead of orbiting the view (js/framing.js). */
+    touch-action: none;
     /* The glow around her outline shows the state. */
     filter: contrast(1.05) saturate(.85) drop-shadow(0 0 6px var(--glow));
   }

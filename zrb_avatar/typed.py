@@ -12,6 +12,10 @@ replaced it -- a page that reloaded mid-question asks again at once.
 One line is one message. A newline inside a line would be read as the end of it, so a paste that
 carries one is joined with spaces: the frame is the line, and a message that quietly became two
 turns is worse than a paragraph that became one.
+
+A line is only taken while something is reading: the route counts the reader that holds it, and
+`POST /text` refuses rather than queueing into a channel nobody drains. A line past `MAX_WAITING` is
+refused the same way -- a page that is told its message arrived has lost something it cannot know.
 """
 
 from __future__ import annotations
@@ -33,6 +37,13 @@ KEEPALIVE_SECONDS = 15
 MAX_WAITING = 32
 
 _lock = threading.Lock()
+# Whether a reader holds the route right now. A page that types into nothing has to be told so rather
+# than watch its line join a queue nobody will drain.
+_reader = False
+
+
+class ChannelFull(RuntimeError):
+    """No reader is taking lines fast enough: ``MAX_WAITING`` of them are already waiting."""
 
 
 class Typed:
@@ -55,10 +66,11 @@ class Typed:
             return self._ended
 
     def put(self, line: str) -> None:
-        """*line*, for the reader holding this. A full channel drops it, saying nothing."""
+        """*line*, for the reader holding this. A full channel refuses it rather than dropping it:
+        a page that is told its line arrived and had it dropped has lost something it cannot know."""
         with self._changed:
             if len(self._lines) >= MAX_WAITING:
-                return
+                raise ChannelFull(f"{MAX_WAITING} lines are already waiting for a reader")
             self._lines.append(line)
             self._changed.notify_all()
 
@@ -90,7 +102,8 @@ def put_line(line: str) -> bool:
     """One line typed on the page. False when it was nothing but space.
 
     Newlines are joined with spaces before the line is framed: one line is one message, and a
-    message that arrived as two turns is worse than a paragraph that arrived as one.
+    message that arrived as two turns is worse than a paragraph that arrived as one. Raises
+    ``ChannelFull`` when the lines already waiting fill the channel.
     """
     text = " ".join(line.split("\n")).strip()[:MAX_LINE_CHARS]
     if not text:
@@ -107,10 +120,46 @@ def start_reading() -> Typed:
     leaves no thread behind writing lines to a socket nobody is reading. What was waiting moves to
     the new channel: a question typed while zrb was between readers is still a question.
     """
-    global _typed
+    global _typed, _reader
     with _lock:
         previous, _typed = _typed, Typed()
         for line in previous.drain():
             _typed.put(line)
         previous.end()
+        _reader = True
         return _typed
+
+
+def stop_reading(channel: Typed) -> None:
+    """The reader holding *channel* has gone.
+
+    Only the channel that is current counts: a reader replaced a moment ago must not turn off the
+    flag the one that replaced it set.
+    """
+    global _reader
+    with _lock:
+        if channel is _typed:
+            _reader = False
+
+
+def reader_attached() -> bool:
+    """Whether a reader holds the route, and so whether a typed line has anywhere to go."""
+    with _lock:
+        return _reader
+
+
+def unsend(line: str) -> None:
+    """Give *line* back to whichever channel is current: it was taken but never written.
+
+    A reader can be replaced between the take and the write, and the line is then in neither channel
+    -- the old one had it removed and the new one was drained before it came back. That gap is a
+    reconnect, and a message typed into it is still a message. A blank line is a keepalive tick
+    rather than a line, and is nothing to put back.
+    """
+    if not line:
+        return
+    with _lock:
+        try:
+            _typed.put(line)
+        except ChannelFull:  # nobody is taking lines at all: there is nowhere to put it back
+            pass
