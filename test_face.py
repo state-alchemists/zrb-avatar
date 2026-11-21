@@ -1464,7 +1464,8 @@ assert "new KeyboardEvent('keydown'" in page, "the buttons do not reach the key 
 # keyboard in the room, so a line typed on the page has to reach zrb as a turn the way a spoken one
 # does. The server frames and cuts it (typed.py); the page sends it to POST /text.
 assert 'id="typed"' in page_html, "a phone has no keypad, and the page gives it nowhere to type"
-assert "fetch('/text'" in (server.HERE / "js" / "typed.js").read_text(), (
+typed_js = (server.HERE / "js" / "typed.js").read_text()
+assert "fetch('/text'" in typed_js, (
     "the page's text box sends nothing to the server"
 )
 # Typing a letter is not pressing a key: an `m` in a sentence must not start the microphone, and a `c`
@@ -1508,6 +1509,24 @@ assert typed.put_line("still a question") is True
 right = typed.start_reading()
 assert left.ended and not right.ended, "a replaced reader keeps its route open"
 assert right.take(0) == "still a question", "what was typed before the reader changed was lost"
+# A page must not be told its line arrived when nothing will read it: the route counts the reader that
+# holds it, and stops counting when that reader leaves — a reader that had already been replaced does
+# not turn off the flag for the one that replaced it.
+assert typed.reader_attached(), "a reader holding the route is not counted"
+typed.stop_reading(left)  # replaced a moment ago, so not the reader the box should be refused for
+assert typed.reader_attached(), "a reader that had already gone turned off the flag for the one there"
+typed.stop_reading(right)
+assert not typed.reader_attached(), "nothing reads the box, and a line is still accepted for it"
+# And a queue nobody drains does not grow for ever: past MAX_WAITING a line is refused rather than
+# dropped, so the page can keep the words instead of believing they were sent.
+for i in range(typed.MAX_WAITING):
+    assert typed.put_line(f"line {i}") is True
+try:
+    typed.put_line("one too many")
+    assert False, "a line was dropped for a reader that was not taking them, and the page was told it arrived"
+except typed.ChannelFull:
+    pass
+assert "nothing is reading the box yet" in typed_js, "a refused line says nothing a person can act on"
 
 # A page that cannot draw her says so rather than sitting on the status line's own "loading…" for
 # ever: a GPU a sleep took away leaves the window black and the line unchanged, and the line is the

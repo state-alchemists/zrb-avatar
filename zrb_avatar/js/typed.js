@@ -31,7 +31,13 @@ export function createTyped(form, input, { onError } = {}) {
         body: text,
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
-      if (!response.ok) throw new Error(`the server said ${response.status}`);
+      if (!response.ok) {
+        // 503 has a reason a person can act on: nothing is reading the box yet, so the line is not lost,
+        // it is unsent -- and Enter sends it again once zrb is reading. A status number is not a sentence.
+        throw new Error(response.status === 503
+          ? 'nothing is reading the box yet'
+          : `the server said ${response.status}`);
+      }
       error = '';
     } catch (e) {
       // The line goes back into the field rather than into nothing: a message that vanished

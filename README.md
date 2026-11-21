@@ -574,6 +574,11 @@ to zrb's dictation, `server.py:1454` takes `/say` from its speech player, `serve
 The browser end of those is `zrb_avatar/js/audio.js`, `zrb_avatar/js/camera.js` and
 `zrb_avatar/js/typed.js`.
 
+`POST /text` answers `204` only when a reader actually holds `/text/in`: with nothing reading — a zrb
+without the typed reader in it, or no chat running at all — it answers `503` and the box keeps the
+line, rather than accepting it into a queue nobody will drain. That is the difference between a
+message that is waiting and one that never had anywhere to go.
+
 Honouring `ZRB_LLM_VOICE_REMOTE_URL` is zrb's, and nothing here repeats that decision. zrb reads it
 at `src/zrb/llm/util/face_server.py:46`, and three places act on it:
 
