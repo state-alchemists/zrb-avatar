@@ -1467,6 +1467,45 @@ page_html = (server.HERE / "face.html").read_text(encoding="utf-8")
 for key in re.findall(r"e\.key !== '([^']+)'", page):
     assert f"<b>{key}</b>" in page_html, f"the page handles {key!r} and never says so"
 assert "click the page" in page_html
+# The foot of the page is one stack in flow, whose height is measured rather than guessed. The status
+# line used to be placed by its own `bottom`, a number tuned for two buttons and a hint: the box that
+# typed lines added arrived underneath it and the line ended up behind the box's top border, reported
+# from the phone on 2026-11-21 as "the UI is a bit misaligned".
+assert 'id="bottom"' in page_html and "--bottom-h" in page_html, (
+    "the status line and the keys are placed by two numbers that can drift apart"
+)
+assert not re.search(r"#status\s*\{[^}]*\bbottom\s*:", page_html), (
+    "the status line is pinned to a number again, and the keys' height is a guess"
+)
+assert re.search(r"#subtitle\s*\{[^}]*bottom:\s*calc\(var\(--bottom-h", page_html), (
+    "a caption lands on the keys instead of clearing them"
+)
+# And nothing she is drawn into goes under the controls: the canvas is the window less that stack, or
+# the text box sits over her boots with her feet cropped behind it. The frame is what she is fitted to,
+# so it is told the canvas's size rather than the window's.
+assert "function freeHeight()" in page and "renderer.setSize(innerWidth, freeHeight())" in page, (
+    "the canvas runs the whole height of the window, so the box covers her feet"
+)
+assert re.search(r"createFraming\(camera[\s\S]{0,300}?window\.faceApp\?\.resize,[\s\S]{0,300}?viewport\)", page), (
+    "she is fitted to the window rather than to the canvas the controls leave"
+)
+assert "const viewport = () => [innerWidth, freeHeight()]" in page, (
+    "the canvas and the framing disagree about the area she is drawn into"
+)
+assert "innerHeight * (innerHeight > innerWidth" not in (server.HERE / "js" / "framing.js").read_text(), (
+    "the framing sizes her by the window again"
+)
+assert "dispatchEvent(new Event('resize'))" in page_html, (
+    "a stack of a different height never tells the canvas it changed"
+)
+# And the page speaks to whoever is running it. "type to her" is true of this avatar and not of the next
+# user's — the same fault the README has — so what a reader sees names the avatar, or nothing at all.
+visible_html = re.sub(r"<!--.*?-->", "", page_html, flags=re.S)
+for phrase in ("type to her", "a message to her", "her face", "her feet", "drawing her", "loading her animations"):
+    assert phrase not in visible_html, f"the page says {phrase!r}, which is one user's avatar"
+code_lines = "\n".join(line for line in page.splitlines() if not line.strip().startswith("//"))
+for phrase in ("drawing her", "loading her animations", "can't draw her", "can't load her"):
+    assert phrase not in code_lines, f"the status line says {phrase!r}, which is one user's avatar"
 # A phone has no keyboard, and two things follow from that. It must not shrink the page to 980 pixels
 # and hold it there — reported from the phone on 2026-11-21 as "too small, I have to zoom in a lot".
 assert "width=device-width" in page_html, "a phone shrinks the page instead of fitting it"

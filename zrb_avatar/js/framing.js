@@ -58,7 +58,7 @@ export function measureReach(vrm, mixer, clips) {
 
 // view: yaw/pitch orbit the focus, a point on her axis `focus` metres above her middle; zoom
 // scales her on screen. Remembered in this browser/app.
-export function createFraming(camera, reach, resizeWindow) {
+export function createFraming(camera, reach, resizeWindow, viewport = () => [innerWidth, innerHeight]) {
   const height = reach.top - reach.bottom, middle = (reach.top + reach.bottom) / 2;
   const distance = 3 * height; // fixed, so the perspective never changes; about the old 20° view
   camera.far = 2 * distance;
@@ -94,8 +94,10 @@ export function createFraming(camera, reach, resizeWindow) {
   // what "too small, I have to zoom in a lot" was. Fitting her body crops a wide pose instead, the
   // price the app already pays. A tall screen gets most of her; a wide one keeps room around her.
   const FILL = { tall: 0.8, wide: 0.55 };
-  const bodyScale = () => innerHeight * (innerHeight > innerWidth ? FILL.tall : FILL.wide)
-    / (reach.stature / distance * MARGIN);
+  const bodyScale = () => {
+    const [width, height] = viewport(); // the canvas, which need not be the window: see js/main.js
+    return height * (height > width ? FILL.tall : FILL.wide) / (reach.stature / distance * MARGIN);
+  };
   const widest = v => RIM.map(yaw => spread({ ...v, yaw }))
     .reduce(([u, w], [su, sw]) => [Math.max(u, su), Math.max(w, sw)]);
   const { availWidth, availHeight } = screen; // read once: the window's own size must never feed back
@@ -120,8 +122,9 @@ export function createFraming(camera, reach, resizeWindow) {
       const height = Math.round(Math.max(160, Math.min(availHeight * 0.85, 2 * tall * scale)));
       if (Math.abs(width - innerWidth) > 1 || Math.abs(height - innerHeight) > 1) resizeWindow(width, height);
     }
-    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(innerHeight / 2 / scale));
-    camera.aspect = innerWidth / innerHeight;
+    const [width, height] = viewport();
+    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(height / 2 / scale));
+    camera.aspect = width / height;
     camera.position.copy(focus).addScaledVector(back, distance);
     camera.up.copy(up); // hers, not the world's: over her head and under her feet stay smooth
     camera.lookAt(focus);

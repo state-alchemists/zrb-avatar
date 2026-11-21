@@ -17,7 +17,16 @@
     /* The glow around her outline shows the state. */
     filter: contrast(1.05) saturate(.85) drop-shadow(0 0 6px var(--glow));
   }
-  #status { position: fixed; bottom: 8px; width: 100%; text-align: center; color: var(--glow); font: 12px monospace; opacity: .7; }
+  /* The status line and the keys are one stack at the foot of the page, laid out by flow. They were two
+     fixed lines before, each with its own `bottom`: the status line's number was tuned for two buttons
+     and a hint, so the box that typed lines added put it behind the box's top border. A stack cannot
+     drift, whatever the hint wraps to. */
+  #bottom {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: flex; flex-direction: column; gap: 8px; padding: 0 10px 8px;
+    pointer-events: none; /* her body is dragged by her; a tap on the page is the page's */
+  }
+  #status { color: var(--glow); font: 12px monospace; text-align: center; opacity: .7; }
   html.app #status { display: none; }
   html.app #status.error { display: block; color: #f46; opacity: 1; }
   /* What the keys do, said on the page they work on. Nothing here starts on load — a browser gives
@@ -25,7 +34,7 @@
      key pressed into a window that never had focus does nothing, and that reads as a broken page.
      Hidden in the app, where the window is her body rather than a manual and the table is README.md's. */
   #keys {
-    position: fixed; left: 10px; bottom: 8px; max-width: 46%;
+    max-width: 46%;
     color: #8fa8c4; font: 11px/1.6 monospace; opacity: .55; pointer-events: none;
   }
   #keys b { color: var(--glow); font-weight: 600; }
@@ -50,21 +59,22 @@
   #keys input::placeholder { color: #7d94ad; }
   #keys input:focus { border-color: var(--glow); background: rgba(60, 200, 255, .16); }
   /* A phone has no keyboard, and a hint that names keys it does not have is a column of text over her
-     feet: the two buttons stay, and the line moves out of the way of the status line above it. */
+     feet: the two buttons stay, and the stack gives the line room of its own above the status line. */
   @media (max-width: 640px) {
-    #keys { max-width: calc(100% - 20px); font-size: 13px; opacity: .85; }
+    #keys { max-width: none; font-size: 13px; opacity: .85; }
     #keys .keys-only { display: none; }
     #keys button { padding: 7px 12px; font-size: 13px; }
     #keys form { margin-bottom: 8px; }
     #keys input { padding: 8px 12px; font-size: 14px; }
-    #status { bottom: 104px; }
   }
   html.app #keys { display: none; }
+  /* Nothing at the foot of the page in the app: the window is her body, and its size is the app's. */
+  html.app #bottom { display: none; }
   /* What she is saying: under her, over the status line, gone when the voice stops. The client
      sends a clear as the audio is read, ahead of the ear, so the line is ended by the mouth
      rather than by the clear — see js/main.js speechEnded. */
   #subtitle {
-    position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
+    position: fixed; left: 50%; bottom: calc(var(--bottom-h, 0px) + 10px); transform: translateX(-50%);
     max-width: min(92%, 40em); padding: 6px 12px; border-radius: 9px;
     background: rgba(9, 11, 18, .74); color: #eaf6ff;
     font: var(--subtitle-size, 15px)/1.35 system-ui, -apple-system, sans-serif;
@@ -90,24 +100,40 @@
 </head>
 <body>
 <div id="subtitle"></div>
-<!-- The keys, on the page they work on. The first line is the one that matters: a browser starts
-     neither a microphone nor a sound before a gesture, so a page that has never been clicked swallows
-     every key and looks broken. The `m` entry is rewritten by js/main.js as the microphone comes and
-     goes, so the word there is always what that press will do next. -->
-<div id="keys">
-  <form id="say" autocomplete="off">
-    <input id="typed" type="text" name="message" placeholder="type to her…" aria-label="a message to her"
-           enterkeyhint="send" autocapitalize="sentences" autocorrect="off" autocomplete="off">
-  </form>
-  <span class="first">tap or click the page, then:</span>
-  <button type="button" data-key="m"><b>m</b> <span id="mic">talk and listen</span></button> ·
-  <button type="button" data-key="c"><b>c</b> <span id="camera">allow this camera</span></button><span class="keys-only"> ·
-  <b>← → ↑ ↓</b> look around ·
-  <b>shift+↑↓</b> her face or her feet ·
-  <b>+ -</b> zoom ·
-  <b>0</b> reset</span>
+<div id="bottom">
+  <div id="status">loading…</div>
+  <!-- The keys, on the page they work on. The first line is the one that matters: a browser starts
+       neither a microphone nor a sound before a gesture, so a page that has never been clicked swallows
+       every key and looks broken. The `m` entry is rewritten by js/main.js as the microphone comes and
+       goes, so the word there is always what that press will do next. -->
+  <div id="keys">
+    <form id="say" autocomplete="off">
+      <input id="typed" type="text" name="message" placeholder="type a line…" aria-label="a line to send"
+             enterkeyhint="send" autocapitalize="sentences" autocorrect="off" autocomplete="off">
+    </form>
+    <span class="first">tap or click the page, then:</span>
+    <button type="button" data-key="m"><b>m</b> <span id="mic">talk and listen</span></button>
+    <button type="button" data-key="c"><b>c</b> <span id="camera">allow this camera</span></button><span class="keys-only"> ·
+    <b>← → ↑ ↓</b> look around ·
+    <b>shift+↑↓</b> face or feet ·
+    <b>+ -</b> zoom ·
+    <b>0</b> reset</span>
+  </div>
 </div>
-<div id="status">loading…</div>
+<script>
+  // How tall the stack at the foot of the page is, said in one place rather than guessed per device: the
+  // caption has to clear it, and its height changes with the width, a wrapped hint, and the keyboard
+  // resizing the page. Without this the caption keeps its fallback and lands on the keys.
+  const bottom = document.getElementById('bottom');
+  const measureBottom = () => {
+    document.documentElement.style.setProperty('--bottom-h', `${bottom.offsetHeight}px`);
+    // And the canvas follows it: she is drawn into the space the controls leave (js/main.js), so a
+    // stack that changed height — a wider hint, a narrower phone — is a canvas that changed with it.
+    dispatchEvent(new Event('resize'));
+  };
+  if (window.ResizeObserver) new ResizeObserver(measureBottom).observe(bottom);
+  measureBottom();
+</script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

@@ -87,7 +87,7 @@ try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 } catch (error) {
   // Coming back from sleep can leave the GPU process gone, and the throw lands where nothing listens.
-  giveUp(`can't draw her: ${error?.message || 'no WebGL context'}`, BOOT_FAILURES);
+  giveUp(`can't draw the avatar: ${error?.message || 'no WebGL context'}`, BOOT_FAILURES);
   throw error;
 }
 document.body.prepend(renderer.domElement);
@@ -97,7 +97,7 @@ document.body.prepend(renderer.domElement);
 // on the way up. Without preventDefault the browser will not let a context come back at all.
 renderer.domElement.addEventListener('webglcontextlost', event => {
   event.preventDefault();
-  giveUp("can't draw her: the graphics context was lost", CONTEXT_FAILURES);
+  giveUp("can't draw the avatar: the graphics context was lost", CONTEXT_FAILURES);
 });
 const desktop = createDesktop(renderer, window.faceApp); // the app's click-through and dragging
 const scene = new THREE.Scene();
@@ -110,9 +110,17 @@ function resize() {
   // again on every resize: page zoom and moving to another display change devicePixelRatio, and a
   // stale one draws her blurry, stretched. Sharper than 2x is invisible at this size.
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setSize(innerWidth, freeHeight());
   frame();
 }
+// The canvas is the part of the page the controls leave. Running it the whole height of a phone put the
+// text box over her boots, and the box is fixed at the foot with nothing she is drawn into going under
+// it: face.html measures that stack into --bottom-h, so the number is read here rather than guessed.
+function freeHeight() {
+  const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-h')) || 0;
+  return Math.max(120, innerHeight - bar);
+}
+const viewport = () => [innerWidth, freeHeight()];
 addEventListener('resize', resize);
 resize();
 
@@ -177,7 +185,7 @@ async function fetchBytes(url, say) {
 async function loadVRM(name) {
   const bytes = await fetchBytes(`${encodeURIComponent(name)}.vrm`,
     (got, total) => setStatusLine(`loading ${name}: ${inMB(got)}${total ? ` of ${inMB(total)}` : ''} MB`));
-  setStatusLine(`loading ${name}: drawing her…`);
+  setStatusLine(`loading ${name}: drawing…`);
   const vrm = (await loader.parseAsync(bytes, '')).userData.vrm;
   if (!vrm) throw new Error('it is not a VRM');
   return vrm;
@@ -317,12 +325,13 @@ async function showModel(name, ticket) {
     fetch('event', { method: 'POST', body: JSON.stringify({ type: 'view', ...seen, run: viewRun, seq: ++viewSeq }) }).catch(() => {});
   }, covers);
   const mixer = new THREE.AnimationMixer(vrm.scene);
-  setStatusLine('loading her animations…'); // a stall here is a different stall from the one above
+  setStatusLine('loading the animations…'); // a stall here is a different stall from the one above
   const { clips, clipName } = clipsFor(await animations, vrm);
   if (ticket !== showing) return stale();
   const unmirrored = Object.values(clips).flatMap(Object.values).filter(c => !clipName.get(c).endsWith('-mirror'));
   const framing = createFraming(camera, measureReach(vrm, mixer, unmirrored),
-    window.faceApp?.resize); // the desktop app's preload lets the page size its window
+    window.faceApp?.resize, // the desktop app's preload lets the page size its window
+    viewport); // and the canvas is what she is fitted to: the window less the foot of the page
 
   // The swap: the old model out (its gaze target too), the new one in, her mood carried over.
   if (her) {
@@ -362,7 +371,7 @@ try {
   if (!model) throw new Error('no .vrm in the models folder');
   await show(model);
 } catch (error) {  // say so, even in the app, instead of showing nothing
-  giveUp(`can't load ${model ? `${model}.vrm` : 'her'}: ${reasonOf(error)}`, LOAD_FAILURES);
+  giveUp(`can't load ${model ? `${model}.vrm` : 'the avatar'}: ${reasonOf(error)}`, LOAD_FAILURES);
   throw error; // nothing below works without her: a listener on a model that is not there is a throw a frame
 }
 // Typing a key is not pressing it: the text box takes its own keys, so a message with an `m` in it
