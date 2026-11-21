@@ -13,6 +13,7 @@ from pathlib import Path
 
 from zrb_avatar import client as face_client
 from zrb_avatar import server
+from zrb_avatar import typed
 from zrb_avatar.client import MOUTH_STEP, Mouth, loudness
 
 # The client compares `context.event == HookEvent.SESSION_START`, and HookEvent is not a string
@@ -1452,23 +1453,87 @@ page_html = (server.HERE / "face.html").read_text(encoding="utf-8")
 for key in re.findall(r"e\.key !== '([^']+)'", page):
     assert f"<b>{key}</b>" in page_html, f"the page handles {key!r} and never says so"
 assert "click the page" in page_html
+# A phone has no keyboard, and two things follow from that. It must not shrink the page to 980 pixels
+# and hold it there — reported from the phone on 2026-11-21 as "too small, I have to zoom in a lot".
+assert "width=device-width" in page_html, "a phone shrinks the page instead of fitting it"
+# And every key a phone must be able to press has to be tappable, through the same listener.
+for key in re.findall(r"e\.key !== '([^']+)'", page):
+    assert f'data-key="{key}"' in page_html, f"{key!r} is keyboard only, and a phone has no keyboard"
+assert "new KeyboardEvent('keydown'" in page, "the buttons do not reach the key listeners"
+# A phone has no keypad either, and a box to type in is the other half of that: the phone is the only
+# keyboard in the room, so a line typed on the page has to reach zrb as a turn the way a spoken one
+# does. The server frames and cuts it (typed.py); the page sends it to POST /text.
+assert 'id="typed"' in page_html, "a phone has no keypad, and the page gives it nowhere to type"
+assert "fetch('/text'" in (server.HERE / "js" / "typed.js").read_text(), (
+    "the page's text box sends nothing to the server"
+)
+# Typing a letter is not pressing a key: an `m` in a sentence must not start the microphone, and a `c`
+# must not ask for the camera. The box's own keys are stopped before the page's key handlers run.
+assert "closest('input, textarea')" in page, "a letter typed in the box also presses a key"
+assert "interactive-widget=resizes-content" in page_html, (
+    "the phone's own keyboard covers the box that was tapped"
+)
+# The camera's hint says what the press did. `c` hands the camera back on purpose — the grant is what
+# it is for — so a label that still reads "allow this camera" after it was allowed hides the answer.
+assert 'id="camera"' in page_html and 'getElementById(\'camera\')' in page, (
+    "the camera's hint never says the camera was allowed"
+)
+
+# The line channel as the server keeps it: one message a line, a blank one refused, and what was
+# already typed follows the reader that replaced the one that left.
+channel = typed.start_reading()
+assert typed.put_line("  hello there  ") is True
+assert channel.take(0) == "hello there"
+assert typed.put_line("\n   \n") is False, "a blank line is not a message"
+assert channel.take(0.05) == "", "a blank line reached zrb"
+assert typed.put_line("two\nlines") is True
+assert channel.take(0) == "two lines", "a line's own newline split it into two messages"
+assert typed.put_line("x" * (typed.MAX_LINE_CHARS + 10)) is True
+assert len(channel.take(0)) == typed.MAX_LINE_CHARS, "a paste is not cut to the length of a line"
+left = typed.start_reading()
+assert typed.put_line("still a question") is True
+right = typed.start_reading()
+assert left.ended and not right.ended, "a replaced reader keeps its route open"
+assert right.take(0) == "still a question", "what was typed before the reader changed was lost"
 
 # A page that cannot draw her says so rather than sitting on the status line's own "loading…" for
 # ever: a GPU a sleep took away leaves the window black and the line unchanged, and the line is the
 # only place a failure can be seen. Both ways in are guarded — the renderer that throws as it is
 # made, and the context that is lost under a page that was already drawing.
 assert "webglcontextlost" in page, "a lost context leaves the window black and silent"
-assert "failToDraw(" in page, "nothing puts a drawing failure on the status line"
+assert "giveUp(" in page, "nothing puts a drawing failure on the status line"
 # One counter for both failures is the bug this pair prevents: a context lost after a page loaded
 # would be cleared by the next load, and a GPU resetting every minute would reload for ever.
 assert "CONTEXT_FAILURES" in page and "BOOT_FAILURES" in page
 assert "removeItem(BOOT_FAILURES)" in page and "removeItem(CONTEXT_FAILURES)" in page
 # And the message has to survive the page that keeps running: a state, camera or connection event
 # arriving after the retries are spent would paint "idle" under a black window, which reads as working.
-assert "drawFailure" in page, "nothing stops a status event from replacing a drawing failure"
+assert "if (failure) return;" in page, "nothing stops a status event from replacing a drawing failure"
 assert "setAnimationLoop(null)" in page, "the loop keeps rendering into a context that is gone"
+# A model that will not load is the same silence, and a likelier one: the camera publishes its names
+# on the way up, so a page that never got her model sits there reading "camera: camera 1" under a black
+# window. So the load reaches the same latch, saying which step failed, and counts the model as it
+# arrives — a phone spends a minute on 18 MB, and a still number is how a stall is told from a page
+# that works.
+assert "LOAD_FAILURES" in page and "removeItem(LOAD_FAILURES)" in page, (
+    "a model that loads after failing leaves the failure count standing, so the retries run out"
+)
+assert "reasonOf(error)" in page, "a model load fails without saying why"
+assert "loading ${name}:" in page, "nothing counts her model as it arrives"
+# A download that stops moving never ends by itself: no error, no reload, a number that will never
+# change. Measured on the phone 2026-11-21 — the size arrived with the headers, not one byte did, and
+# the page waited. So the wire is timed, and a stall has a sentence of its own.
+assert "STALL_MS" in page, "a stalled download sits at a number that will never change"
+assert "the download stalled at" in page, "a stall says nothing a reader can act on"
+# And the line belongs to the load while a load is in flight: the camera publishes its names on the way
+# up and a state event can paint "idle" over a number that is still counting, which is what made the
+# phone's working page and broken page look the same. Measured, not guessed — the first version of the
+# stall timer painted a parse failure because a cancel ends a read before a rejection can be seen.
+assert "let loading = null;" in page, "nothing keeps a load's number from being painted over"
+assert "if (!loading) setStatusLine(state);" in page, "a state event paints over a load in flight"
+assert "if (!error && loading) return;" in page, "the camera's names paint over a load in flight"
 assert page.count("statusEl.textContent = ") == 2, (
-    "only setStatus and failToDraw may write the line; every other writer goes through the latch"
+    "only setStatus and giveUp may write the line; every other writer goes through the latch"
 )
 
 # Every name AvatarPose (zrb_init.py) offers is one the page (js/pose.js) knows.
