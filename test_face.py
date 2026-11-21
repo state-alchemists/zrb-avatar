@@ -1530,8 +1530,14 @@ assert "the download stalled at" in page, "a stall says nothing a reader can act
 # phone's working page and broken page look the same. Measured, not guessed — the first version of the
 # stall timer painted a parse failure because a cancel ends a read before a rejection can be seen.
 assert "let loading = null;" in page, "nothing keeps a load's number from being painted over"
-assert "if (!loading) setStatusLine(state);" in page, "a state event paints over a load in flight"
+assert "if (!loading && !loadError) setStatusLine(state);" in page, "a state event paints over a load in flight"
 assert "if (!error && loading) return;" in page, "the camera's names paint over a load in flight"
+# And a swap that fails is not painted over either: by the time it says why, the load has already
+# cleared `loading`, so the next state event would put "idle" on the line a moment later and the page
+# would look like it changed her. The reason is kept until another writer takes the line.
+assert "let loadError = null;" in page, "a failed model swap is replaced by the next state event"
+assert "if (text !== loadError) loadError = null;" in page, "a kept load error is never let go"
+assert "loadError = `can't load ${msg.value}.vrm:" in page, "a failed swap is written without being kept"
 assert page.count("statusEl.textContent = ") == 2, (
     "only setStatus and giveUp may write the line; every other writer goes through the latch"
 )

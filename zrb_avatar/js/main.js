@@ -47,9 +47,14 @@ const RETRY_MS = 3000; // how long the reason stays readable before the page tri
 // "idle" under it looks like a page that is working.
 let failure = null;
 let loading = null; // the model on its way, if one is: while it is, the line is the load's
+// The model that would not load, while the line is still saying so. A failed swap has already cleared
+// `loading` by the time it says why, so without this the next state event writes "idle" over the
+// reason, and a page that could not change her looks like one that did.
+let loadError = null;
 let events = null; // the server's, see connect(); declared here because giveUp is called before connect() runs
 function setStatusLine(text, isError = false) {
   if (failure) return;
+  if (text !== loadError) loadError = null; // another writer has taken the line
   statusEl.textContent = text;
   statusEl.classList.toggle('error', !!isError);
 }
@@ -203,7 +208,7 @@ function setState(value) {
   if (value === 'idle' && (state === 'thinking' || state === 'tool')) her?.expression.smileSoon(); // done: a smile
   state = LOOK[value] ? value : 'idle';
   document.documentElement.style.setProperty('--glow', LOOK[state]);
-  if (!loading) setStatusLine(state); // a load in flight owns the line until she is on screen
+  if (!loading && !loadError) setStatusLine(state); // a load in flight, or one that failed, owns the line
   followState();
 }
 
@@ -507,7 +512,13 @@ function onEvent({ data }) {
     // Another avatar: in her place, once we know it is there (a bad name changes nothing). A name
     // that is there and will not load says so and keeps her: this page is still working.
     fetch('models').then(r => r.json())
-      .then(names => { if (names.includes(msg.value)) show(msg.value).catch(error => setStatusLine(`can't load ${msg.value}.vrm: ${reasonOf(error)}`, true)); })
+      .then(names => {
+        if (!names.includes(msg.value)) return;
+        show(msg.value).catch(error => {
+          loadError = `can't load ${msg.value}.vrm: ${reasonOf(error)}`; // and setState leaves it alone
+          setStatusLine(loadError, true);
+        });
+      })
       .catch(() => {});
   } else if (msg.type === 'pose') {
     msg.release ? her.pose.release() : her.pose.set(msg);
