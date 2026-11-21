@@ -27,14 +27,21 @@ const statusEl = document.getElementById('status');
 // never replaces it says nothing at all: a GPU that a sleep or a driver reset took away leaves the
 // window black, and the status line is the only place a failure can be seen. Retried twice, then
 // left saying so — a reload that fails again is a loop, not a recovery.
+//
+// Two counters, because the two failures recover differently. Failing to start proves the GPU is
+// gone, so a load that succeeds clears it. A context lost under a page that was drawing is a page
+// that already loaded, so clearing that count on the next load would let a driver resetting every
+// minute reload for ever; it clears only once the page has held a frame for a minute.
 const BOOT_FAILURES = 'zrb-avatar-boot-failures';
-function failToDraw(reason) {
-  const failures = Number(sessionStorage.getItem(BOOT_FAILURES) || '0');
+const CONTEXT_FAILURES = 'zrb-avatar-context-failures';
+const STABLE_MS = 60000; // a page that has drawn this long has a GPU again
+function failToDraw(reason, failuresIn) {
+  const failures = Number(sessionStorage.getItem(failuresIn) || '0');
   const retry = failures < 2;
   statusEl.textContent = `can't draw her: ${reason}${retry ? ' — reloading' : ' — reload the page to try again'}`;
   statusEl.classList.add('error');
   if (!retry) return;
-  sessionStorage.setItem(BOOT_FAILURES, String(failures + 1));
+  sessionStorage.setItem(failuresIn, String(failures + 1));
   setTimeout(() => location.reload(), 3000);
 }
 
@@ -43,7 +50,7 @@ try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 } catch (error) {
   // Coming back from sleep can leave the GPU process gone, and the throw lands where nothing listens.
-  failToDraw(error?.message || 'no WebGL context');
+  failToDraw(error?.message || 'no WebGL context', BOOT_FAILURES);
   throw error;
 }
 document.body.prepend(renderer.domElement);
@@ -53,7 +60,7 @@ document.body.prepend(renderer.domElement);
 // on the way up. Without preventDefault the browser will not let a context come back at all.
 renderer.domElement.addEventListener('webglcontextlost', event => {
   event.preventDefault();
-  failToDraw('the graphics context was lost');
+  failToDraw('the graphics context was lost', CONTEXT_FAILURES);
 });
 const desktop = createDesktop(renderer, window.faceApp); // the app's click-through and dragging
 const scene = new THREE.Scene();
@@ -190,7 +197,10 @@ async function show(name) {
   params.set('model', name);
   history.replaceState(null, '', withParams());
   setState(state);
-  sessionStorage.removeItem(BOOT_FAILURES); // she is on screen: the next failure is a new one
+  // She is on screen: a start that worked is not a start that failed. The context count outlives
+  // this load on purpose — a page that reloaded after a loss has to earn its clean slate by drawing.
+  sessionStorage.removeItem(BOOT_FAILURES);
+  setTimeout(() => sessionStorage.removeItem(CONTEXT_FAILURES), STABLE_MS);
   connect(name);
   return her;
 }

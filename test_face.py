@@ -1459,6 +1459,10 @@ assert "click the page" in page_html
 # made, and the context that is lost under a page that was already drawing.
 assert "webglcontextlost" in page, "a lost context leaves the window black and silent"
 assert "failToDraw(" in page, "nothing puts a drawing failure on the status line"
+# One counter for both failures is the bug this pair prevents: a context lost after a page loaded
+# would be cleared by the next load, and a GPU resetting every minute would reload for ever.
+assert "CONTEXT_FAILURES" in page and "BOOT_FAILURES" in page
+assert "removeItem(BOOT_FAILURES)" in page and "removeItem(CONTEXT_FAILURES)" in page
 
 # Every name AvatarPose (zrb_init.py) offers is one the page (js/pose.js) knows.
 tools = (server.HERE / "zrb_init.py").read_text()
