@@ -1709,6 +1709,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
+    def _read_exactly(self, size: int) -> bytes | None:
+        """Exactly *size* bytes, or None when the body stopped short of what it declared.
+
+        A request that says one length and sends less is a page that went away in the middle of a
+        line. Half a message is not a message: putting the part that arrived to zrb would hand the
+        chat a truncated sentence as though it had been typed whole.
+        """
+        body = b""
+        while len(body) < size:
+            block = self.rfile.read(size - len(body))
+            if not block:
+                return None
+            body += block
+        return body
+
     def _take_text(self):
         """One line typed on the page, for zrb's next turn.
 
@@ -1722,8 +1737,11 @@ class Handler(BaseHTTPRequestHandler):
         size = self._length(typed.MAX_BODY_BYTES)
         if size is None:
             return
+        body = self._read_exactly(size)
+        if body is None:
+            return self.send_error(400, "the typed line stopped short")
         try:
-            line = self.rfile.read(size).decode("utf-8")
+            line = body.decode("utf-8")
         except UnicodeDecodeError:
             return self.send_error(400, "a typed line is UTF-8")
         if not typed.reader_attached():
@@ -1787,17 +1805,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
+        line = ""
         try:
             while not channel.ended:
                 line = channel.take(typed.KEEPALIVE_SECONDS)
-                if channel.ended:
-                    return  # a newer reader has it: this response is over
-                if _peer_closed(self.connection):
-                    return  # zrb has stopped listening, and the page is told so at once
+                if channel.ended or _peer_closed(self.connection):
+                    # A newer reader has it, or this one has gone. Either way a line already taken
+                    # goes back rather than out with the response: a reconnect is not a reason to
+                    # lose what was said into it.
+                    typed.unsend(line)
+                    return
                 self.wfile.write(line.encode() + b"\n")
                 self.wfile.flush()
         except OSError:  # the far end closed: nothing left to say, and nobody to say it to
-            pass
+            typed.unsend(line)  # the write that failed carried a line with it
         finally:
             typed.stop_reading(channel)  # zrb has stopped listening, and the box is told so
 

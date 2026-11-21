@@ -146,3 +146,20 @@ def reader_attached() -> bool:
     """Whether a reader holds the route, and so whether a typed line has anywhere to go."""
     with _lock:
         return _reader
+
+
+def unsend(line: str) -> None:
+    """Give *line* back to whichever channel is current: it was taken but never written.
+
+    A reader can be replaced between the take and the write, and the line is then in neither channel
+    -- the old one had it removed and the new one was drained before it came back. That gap is a
+    reconnect, and a message typed into it is still a message. A blank line is a keepalive tick
+    rather than a line, and is nothing to put back.
+    """
+    if not line:
+        return
+    with _lock:
+        try:
+            _typed.put(line)
+        except ChannelFull:  # nobody is taking lines at all: there is nowhere to put it back
+            pass

@@ -1017,6 +1017,20 @@ try:
 finally:
     server._snapshots.pop("waiting")
 
+# And a body that stops short of the length it declared is not a message: the part that arrived put to
+# zrb as a typed line would be a truncated sentence, and the page would believe it had been sent.
+def post_truncated(path: str, declared: int, sent: bytes) -> int:
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+        raw.sendall(f"POST {path} HTTP/1.1\r\nHost: x\r\nContent-Length: {declared}\r\n\r\n".encode() + sent)
+        raw.shutdown(socket.SHUT_WR)  # the page went away in the middle of the line
+        answer = b""
+        while chunk := raw.recv(4096):
+            answer += chunk
+        return int(answer.split()[1])
+
+
+assert post_truncated("/text", 40, b"only this much") == 400, "a cut-off body became a message"
+
 # AvatarLook's picture: GET /snapshot asks the open window, which answers with a PNG and what she
 # is doing; a made-up id, a non-PNG or an oversized answer is refused.
 import base64  # noqa: E402
@@ -1519,6 +1533,16 @@ typed.stop_reading(right)
 assert not typed.reader_attached(), "nothing reads the box, and a line is still accepted for it"
 # And a queue nobody drains does not grow for ever: past MAX_WAITING a line is refused rather than
 # dropped, so the page can keep the words instead of believing they were sent.
+# A line a relay has taken but not written goes back to whoever holds the route now: the gap between
+# the take and the write is where a reconnect happens, and a message typed into one is still a message.
+assert typed.put_line("taken but not written") is True
+hand = typed.start_reading()
+assert hand.take(0) == "taken but not written"  # the relay has it in hand
+newer = typed.start_reading()  # and zrb reconnected before it could write it
+typed.unsend("taken but not written")
+assert newer.take(0) == "taken but not written", "a line in a replaced reader's hand was lost"
+typed.unsend("")  # a keepalive tick, which is not a line
+assert newer.take(0.05) == "", "a keepalive tick came back as an empty message"
 for i in range(typed.MAX_WAITING):
     assert typed.put_line(f"line {i}") is True
 try:
