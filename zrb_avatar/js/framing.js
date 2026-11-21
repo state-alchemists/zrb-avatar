@@ -138,13 +138,58 @@ export function createFraming(camera, reach, resizeWindow) {
     else if (e.key === '-') view.zoom /= 1.1;
     else if (e.key === '0') Object.assign(view, DEFAULT_VIEW);
     else return;
-    for (const angle of ['yaw', 'pitch']) view[angle] = Math.atan2(Math.sin(view[angle]), Math.cos(view[angle])); // all the way round
+    settle();
+  }
+  // The mouse wheel zooms too, a step per notch.
+  const onWheel = e => onKey({ key: e.deltaY < 0 ? '+' : '-' });
+
+  // A phone has no arrow keys and no wheel, so one finger orbits her and two pinch her, in the same
+  // steps the keys take: there is one view, and the two ways of moving it must not drift apart.
+  const DRAG_RADIANS_PER_PIXEL = 0.006;
+  // A finger drags far further than a key press -- 250 px is 1.5 rad, past the top of her head -- so
+  // the pitch stops short of the poles. Yaw is still all the way round, as the keys leave it.
+  const PITCH_LIMIT = 1.35;
+  const fingers = new Map(); // where each finger is, by pointer id
+  let apart = 0; // how far apart two fingers were at the last move (named apart: `spread` is her reach)
+
+  function twoFingers() {
+    const [a, b] = [...fingers.values()];
+    return fingers.size === 2 ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+  }
+  function onPointerDown(e) {
+    fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    apart = twoFingers();
+  }
+  function onPointerMove(e) {
+    const was = fingers.get(e.pointerId);
+    if (!was) return; // a pointer that did not start on her, a mouse moving over the page
+    fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (fingers.size === 1) {
+      view.yaw += (e.clientX - was.x) * DRAG_RADIANS_PER_PIXEL;
+      view.pitch -= (e.clientY - was.y) * DRAG_RADIANS_PER_PIXEL;
+      view.pitch = THREE.MathUtils.clamp(view.pitch, -PITCH_LIMIT, PITCH_LIMIT);
+    } else if (fingers.size === 2) {
+      const now = twoFingers();
+      if (apart > 0 && now > 0) view.zoom *= now / apart;
+      apart = now;
+    } else {
+      return; // three fingers are not a gesture this page has
+    }
+    settle();
+  }
+  function onPointerUp(e) {
+    fingers.delete(e.pointerId);
+    apart = twoFingers(); // the finger left over must not count as a pinch
+  }
+
+  // After anything moved the view: angles wrapped all the way round, a size and a focus that are
+  // allowed, remembered for the next window, and drawn.
+  function settle() {
+    for (const angle of ['yaw', 'pitch']) view[angle] = Math.atan2(Math.sin(view[angle]), Math.cos(view[angle]));
     view.zoom = THREE.MathUtils.clamp(view.zoom, 0.5, 8);
     view.focus = THREE.MathUtils.clamp(view.focus, -height / 2, height / 2);
     try { localStorage.setItem('view', JSON.stringify(view)); } catch {}
     frame();
   }
-  // The mouse wheel zooms too, a step per notch.
-  const onWheel = e => onKey({ key: e.deltaY < 0 ? '+' : '-' });
-  return { frame, onKey, onWheel };
+  return { frame, onKey, onWheel, onPointerDown, onPointerMove, onPointerUp };
 }

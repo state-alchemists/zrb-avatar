@@ -381,6 +381,15 @@ for (const button of document.querySelectorAll('#keys [data-key]')) {
   button.addEventListener('click', () => dispatchEvent(new KeyboardEvent('keydown', { key: button.dataset.key })));
 }
 addEventListener('wheel', e => { e.preventDefault(); her.framing.onWheel(e); her.view.notice(); }, { passive: false }); // not the page's own zoom
+// A phone has a finger instead of a wheel. A drag orbits her and a pinch resizes her, starting on the
+// canvas alone: the keys and the box are elements above it, so a tap there is still a tap and never a
+// drag. The canvas refuses the browser's own gestures (touch-action, in face.html), or the drag would
+// scroll or zoom the page under her instead.
+const canvasEl = renderer.domElement;
+canvasEl.addEventListener('pointerdown', e => { her.framing.onPointerDown(e); her.view.notice(); });
+addEventListener('pointermove', e => her.framing.onPointerMove(e)); // on the window: a finger that slides off her keeps the drag
+addEventListener('pointerup', e => her.framing.onPointerUp(e));
+addEventListener('pointercancel', e => her.framing.onPointerUp(e));
 
 // What the user sees right now, for zrb's AvatarLook and `zrb-avatar snapshot`: this frame, from this
 // camera, at most 768 px, on a dark backdrop where the app is see-through.

@@ -1473,6 +1473,14 @@ assert "closest('input, textarea')" in page, "a letter typed in the box also pre
 assert "interactive-widget=resizes-content" in page_html, (
     "the phone's own keyboard covers the box that was tapped"
 )
+# And the view was keyboard-only as well: no arrows and no wheel on a phone, so a page that would not
+# turn. One finger orbits her and two pinch her, in the keys' own steps -- one view, two ways to move it.
+framing = (server.HERE / "js" / "framing.js").read_text()
+assert "canvasEl.addEventListener('pointerdown'" in page, "nothing starts a drag on her"
+assert "onPointerMove" in page and "onPointerMove" in framing, "a drag moves nothing"
+assert "view.yaw += (e.clientX - was.x)" in framing, "a drag across her does not turn her"
+assert "view.zoom *= now / apart" in framing, "a pinch resizes nothing"
+assert "touch-action: none" in page_html, "the browser takes the drag for a scroll of the page"
 # The camera's hint says what the press did. `c` hands the camera back on purpose — the grant is what
 # it is for — so a label that still reads "allow this camera" after it was allowed hides the answer.
 assert 'id="camera"' in page_html and 'getElementById(\'camera\')' in page, (
