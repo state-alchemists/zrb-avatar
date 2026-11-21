@@ -162,7 +162,7 @@ export function createFraming(camera, reach, resizeWindow) {
   }
   function onPointerMove(e) {
     const was = fingers.get(e.pointerId);
-    if (!was) return; // a pointer that did not start on her, a mouse moving over the page
+    if (!was) return false; // a pointer that did not start on her, a mouse moving over the page
     fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (fingers.size === 1) {
       view.yaw += (e.clientX - was.x) * DRAG_RADIANS_PER_PIXEL;
@@ -173,9 +173,10 @@ export function createFraming(camera, reach, resizeWindow) {
       if (apart > 0 && now > 0) view.zoom *= now / apart;
       apart = now;
     } else {
-      return; // three fingers are not a gesture this page has
+      return false; // three fingers are not a gesture this page has
     }
     settle();
+    return true; // the view moved: the caller owes it a notice, as every key press does
   }
   function onPointerUp(e) {
     fingers.delete(e.pointerId);

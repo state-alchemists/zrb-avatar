@@ -385,9 +385,15 @@ addEventListener('wheel', e => { e.preventDefault(); her.framing.onWheel(e); her
 // canvas alone: the keys and the box are elements above it, so a tap there is still a tap and never a
 // drag. The canvas refuses the browser's own gestures (touch-action, in face.html), or the drag would
 // scroll or zoom the page under her instead.
+//
+// A move that changed the view is noted the way a key press is, and for the same reason: zrb is told
+// the view once it settles, so a drag that is still going must push that moment back rather than let it
+// pass at the angle the finger happened to be at a second and a half in.
 const canvasEl = renderer.domElement;
 canvasEl.addEventListener('pointerdown', e => { her.framing.onPointerDown(e); her.view.notice(); });
-addEventListener('pointermove', e => her.framing.onPointerMove(e)); // on the window: a finger that slides off her keeps the drag
+addEventListener('pointermove', e => { // on the window: a finger that slides off her keeps the drag
+  if (her.framing.onPointerMove(e)) her.view.notice();
+});
 addEventListener('pointerup', e => her.framing.onPointerUp(e));
 addEventListener('pointercancel', e => her.framing.onPointerUp(e));
 
