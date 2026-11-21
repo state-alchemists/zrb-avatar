@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>zrb face</title>
 <style>
   :root { --glow: #3cf; }
@@ -26,6 +27,35 @@
   }
   #keys b { color: var(--glow); font-weight: 600; }
   #keys .first { display: block; color: #ffd76a; }
+  /* Two of the entries are buttons: a phone has no keyboard to press, and a tap is both the gesture a
+     browser wants before a microphone and the only way in. The rest need keys a phone does not have. */
+  #keys button {
+    pointer-events: auto; cursor: pointer; font: inherit; color: inherit;
+    background: rgba(60, 200, 255, .10); border: 1px solid rgba(60, 200, 255, .35);
+    border-radius: 99px; padding: 1px 8px;
+  }
+  #keys button:active { background: rgba(60, 200, 255, .30); }
+  /* Typing: a phone's keyboard is the only one in the room, so the page carries a text box beside
+     the two buttons. Enter sends the line, and it becomes a turn as typing into the terminal does. */
+  #keys form { display: flex; gap: 6px; margin-bottom: 6px; }
+  #keys input {
+    pointer-events: auto; flex: 1 1 auto; min-width: 0;
+    font: inherit; color: #eaf6ff; background: rgba(60, 200, 255, .08);
+    border: 1px solid rgba(60, 200, 255, .35); border-radius: 99px; padding: 3px 10px;
+    outline: none;
+  }
+  #keys input::placeholder { color: #7d94ad; }
+  #keys input:focus { border-color: var(--glow); background: rgba(60, 200, 255, .16); }
+  /* A phone has no keyboard, and a hint that names keys it does not have is a column of text over her
+     feet: the two buttons stay, and the line moves out of the way of the status line above it. */
+  @media (max-width: 640px) {
+    #keys { max-width: calc(100% - 20px); font-size: 13px; opacity: .85; }
+    #keys .keys-only { display: none; }
+    #keys button { padding: 7px 12px; font-size: 13px; }
+    #keys form { margin-bottom: 8px; }
+    #keys input { padding: 8px 12px; font-size: 14px; }
+    #status { bottom: 104px; }
+  }
   html.app #keys { display: none; }
   /* What she is saying: under her, over the status line, gone when the voice stops. The client
      sends a clear as the audio is read, ahead of the ear, so the line is ended by the mouth
@@ -62,13 +92,17 @@
      every key and looks broken. The `m` entry is rewritten by js/main.js as the microphone comes and
      goes, so the word there is always what that press will do next. -->
 <div id="keys">
-  <span class="first">click the page, then:</span>
-  <b>m</b> <span id="mic">talk and listen</span> ·
-  <b>c</b> allow this camera ·
+  <form id="say" autocomplete="off">
+    <input id="typed" type="text" name="message" placeholder="type to her…" aria-label="a message to her"
+           enterkeyhint="send" autocapitalize="sentences" autocorrect="off" autocomplete="off">
+  </form>
+  <span class="first">tap or click the page, then:</span>
+  <button type="button" data-key="m"><b>m</b> <span id="mic">talk and listen</span></button> ·
+  <button type="button" data-key="c"><b>c</b> <span id="camera">allow this camera</span></button><span class="keys-only"> ·
   <b>← → ↑ ↓</b> look around ·
   <b>shift+↑↓</b> her face or her feet ·
   <b>+ -</b> zoom ·
-  <b>0</b> reset
+  <b>0</b> reset</span>
 </div>
 <div id="status">loading…</div>
 <script type="module" src="js/main.js"></script>

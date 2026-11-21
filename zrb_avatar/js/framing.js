@@ -86,9 +86,16 @@ export function createFraming(camera, reach, resizeWindow) {
   // Pixels per unit of that plane, the same from every side so orbiting never resizes her. In the
   // app she stands 45% of the screen tall at zoom 1, whatever her clips reach, and the window
   // follows her reach up to 0.8 of her height (and half the screen) wide and 85% tall: past that, a wandering dance is
-  // cropped rather than the window taking over the screen. In a browser (or an app without
-  // resizeWindow) she fits the window from whichever side is widest.
-  const fit = (width, height, [u, w]) => Math.min(width / u, height / w) / 2;
+  // cropped rather than the window taking over the screen.
+  //
+  // A browser has no window to grow, so it sizes her to her *body* rather than to the widest thing any
+  // clip reaches. That prism is about four times her silhouette — an arm out in one dance, a jump in
+  // another — and fitting the prism into a phone's screen made her a quarter of the height, which is
+  // what "too small, I have to zoom in a lot" was. Fitting her body crops a wide pose instead, the
+  // price the app already pays. A tall screen gets most of her; a wide one keeps room around her.
+  const FILL = { tall: 0.8, wide: 0.55 };
+  const bodyScale = () => innerHeight * (innerHeight > innerWidth ? FILL.tall : FILL.wide)
+    / (reach.stature / distance * MARGIN);
   const widest = v => RIM.map(yaw => spread({ ...v, yaw }))
     .reduce(([u, w], [su, sw]) => [Math.max(u, su), Math.max(w, sw)]);
   const { availWidth, availHeight } = screen; // read once: the window's own size must never feed back
@@ -100,7 +107,7 @@ export function createFraming(camera, reach, resizeWindow) {
   const CAPTION_WIDTH = 510;
 
   function frame() {
-    const scale = (appScale || fit(innerWidth, innerHeight, widest(view))) * view.zoom;
+    const scale = (appScale || bodyScale()) * view.zoom;
     // The window must not follow the camera. It is resized around its middle, where she is, so a
     // window that grew as the camera turned slid her across the screen -- which is all "she moves
     // when I orbit" ever was. So its height is her reach from every angle, and its width is a

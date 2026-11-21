@@ -30,6 +30,10 @@ the page. Both GETs are one long response of raw frames, never JSON: the headers
 and a sentence made at a new sample rate ends the out stream so the page connects again and reads
 that rate rather than playing it at the wrong pitch. Nothing here knows what speech is; audio.py
 holds the two queues and the caps on them.
+Typed lines take the same shape without the format: POST /text takes one line from the page's text
+box, and GET /text/in hands the lines to zrb in the order they were typed, newline-framed UTF-8 with
+a blank line every fifteen seconds so a proxy does not end a quiet route. One line is one message,
+and typed.py holds the queue and the caps on it.
 
 Stdlib only; run with `python3 server.py` or `zrb-avatar serve`, then open http://localhost:7777.
 
@@ -81,9 +85,9 @@ from importlib import metadata
 from pathlib import Path
 
 try:  # imported as `zrb_avatar.server`, which is how the tests and every tool see her
-    from zrb_avatar import audio, auth
+    from zrb_avatar import audio, auth, typed
 except ImportError:  # run as a script beside the package, which is how `zrb-avatar` starts her
-    import audio, auth
+    import audio, auth, typed
 
 # zrb spells its own settings <ENV_PREFIX>_*, and reads that prefix from the bare
 # `_ZRB_ENV_PREFIX` -- the bootstrap key in zrb's config, deliberately unprefixed so it
@@ -1300,6 +1304,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._relay_audio_to_zrb()
         if path == "/audio/out":  # what zrb said, on its way to the page
             return self._relay_speech_to_page()
+        if path == "/text/in":  # what was typed on the page, on its way to zrb
+            return self._relay_typed_to_zrb()
         if path == "/snapshot":
             shot = take_snapshot()
             if shot is None:
@@ -1447,6 +1453,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._take_audio()
         if self.path == "/say":  # what zrb's speech player made
             return self._take_speech()
+        if self.path == "/text":  # one line typed on the page
+            return self._take_text()
         if self.path.startswith("/snapshot?"):
             return self._snapshot()
         # The page's cameras, as the page names them: the page itself travels in the query.
@@ -1685,6 +1693,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
+    def _take_text(self):
+        """One line typed on the page, for zrb's next turn.
+
+        A typed line is measured, not streamed: the page knows what it sent, and a body that says
+        otherwise is refused rather than read until the client hangs up. UTF-8 only — a line that is
+        not is a page to fix, not a message to guess at.
+        """
+        size = self._length(typed.MAX_BODY_BYTES)
+        if size is None:
+            return
+        try:
+            line = self.rfile.read(size).decode("utf-8")
+        except UnicodeDecodeError:
+            return self.send_error(400, "a typed line is UTF-8")
+        if not typed.put_line(line):
+            return self.send_error(400, "nothing was typed")
+        self.send_response(204)
+        self.end_headers()
+
     def _relay_audio_to_zrb(self):
         """The page's microphone, as one long response of raw frames.
 
@@ -1718,6 +1745,29 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Channels", str(audio.CHANNELS))
         self.end_headers()
         self._write_frames(channel, rate, follows_rate=True)
+
+    def _relay_typed_to_zrb(self):
+        """What was typed on the page, as one long response of newline-framed UTF-8 lines.
+
+        One reader at a time, as the microphone has one: two readers would take different lines of
+        one message and neither would read it whole. A quiet route writes a blank line rather than
+        nothing, which is the write that notices a reader that has gone, and a blank line is not a
+        line: the reader on the other side skips it.
+        """
+        channel = typed.start_reading()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            while not channel.ended:
+                line = channel.take(typed.KEEPALIVE_SECONDS)
+                if channel.ended:
+                    return  # a newer reader has it: this response is over
+                self.wfile.write(line.encode() + b"\n")
+                self.wfile.flush()
+        except OSError:  # the far end closed: nothing left to say, and nobody to say it to
+            pass
 
     def _stream(self):
         self.send_response(200)

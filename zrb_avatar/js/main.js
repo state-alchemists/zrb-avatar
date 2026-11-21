@@ -14,6 +14,7 @@ import { createPose } from './pose.js';
 import { createDesktop } from './desktop.js';
 import { createAudio } from './audio.js';
 import { createCamera } from './camera.js';
+import { createTyped } from './typed.js';
 
 // state -> glow colour
 const LOOK = { idle: '#33ccff88', thinking: '#a6f', tool: '#3f9', attention: '#f46', permission: '#f22', speaking: '#6ef' };
@@ -23,52 +24,66 @@ const FPS = Number(params.get('fps')) || 30;
 if (params.has('app')) document.documentElement.classList.add('app');
 const statusEl = document.getElementById('status');
 let frame = () => {}; // set once the model is loaded
-let renderer; // made below; declared here so failToDraw can reach it, even when making it threw
+let renderer; // made below; declared here so giveUp can reach it, even when making it threw
 
-// What the page says when it cannot draw her. "loading…" is the line's own text, and a page that
-// never replaces it says nothing at all: a GPU that a sleep or a driver reset took away leaves the
-// window black, and the status line is the only place a failure can be seen. Retried twice, then
-// left saying so — a reload that fails again is a loop, not a recovery.
+// What the page says when it cannot work: a GPU it cannot draw with, or a model it cannot load.
+// "loading…" is the line's own text, and a page that never replaces it says nothing at all: a window
+// black under a camera name looks like a page that is working, and leaves a reader holding nothing
+// to report. Retried twice, then left saying so — a reload that fails again is a loop, not a
+// recovery.
 //
-// Two counters, because the two failures recover differently. Failing to start proves the GPU is
+// Three counters, because the three failures recover differently. Failing to start proves the GPU is
 // gone, so a load that succeeds clears it. A context lost under a page that was drawing is a page
 // that already loaded, so clearing that count on the next load would let a driver resetting every
-// minute reload for ever; it clears only once the page has held a frame for a minute.
+// minute reload for ever; it clears only once the page has held a frame for a minute. A model that
+// would not load is cleared by the next one that does.
 const BOOT_FAILURES = 'zrb-avatar-boot-failures';
 const CONTEXT_FAILURES = 'zrb-avatar-context-failures';
+const LOAD_FAILURES = 'zrb-avatar-load-failures';
 const STABLE_MS = 60000; // a page that has drawn this long has a GPU again
-// Set once the retries are spent: the message is then the whole of what this page can say, and a
+const RETRY_MS = 3000; // how long the reason stays readable before the page tries again
+// Set once the page has given up: the message is then the whole of what this page can say, and a
 // state, camera or connection event arriving afterwards must not paint over it — a black window with
 // "idle" under it looks like a page that is working.
-let drawFailure = null;
-let events = null; // the server's, see connect(); declared here because failToDraw is called before connect() runs
+let failure = null;
+let loading = null; // the model on its way, if one is: while it is, the line is the load's
+// The model that would not load, while the line is still saying so. A failed swap has already cleared
+// `loading` by the time it says why, so without this the next state event writes "idle" over the
+// reason, and a page that could not change her looks like one that did.
+let loadError = null;
+let events = null; // the server's, see connect(); declared here because giveUp is called before connect() runs
 function setStatusLine(text, isError = false) {
-  if (drawFailure) return;
+  if (failure) return;
+  if (text !== loadError) loadError = null; // another writer has taken the line
   statusEl.textContent = text;
   statusEl.classList.toggle('error', !!isError);
 }
-function failToDraw(reason, failuresIn) {
+function reasonOf(error) { return error?.message || String(error); }
+// The page gives up: nothing more will be drawn, and the line keeps the reason. *said* is the whole
+// sentence, because what could not be done differs — a GPU that will not start, a model that will
+// not load — and the reader needs that difference more than the reader needs tidiness.
+function giveUp(said, failuresIn) {
   // Latched at once, not when the retries run out: from here the line is the failure, and a state,
-  // camera or connection event arriving in the three seconds before the reload must not paint over
-  // it — a black window reading "idle" looks like a page that works.
-  drawFailure = reason;
+  // camera or connection event arriving in the seconds before the reload must not paint over it —
+  // a black window reading "idle" looks like a page that works.
+  failure = said;
   frame = () => {}; // nothing to draw into
   renderer?.setAnimationLoop(null); // nor a loop to draw with: this is the one that kept rendering
   events?.close(); // nor events to replace the line with her state
   const failures = Number(sessionStorage.getItem(failuresIn) || '0');
   const retry = failures < 2;
-  statusEl.textContent = `can't draw her: ${reason}${retry ? ' — reloading' : ' — reload the page to try again'}`;
+  statusEl.textContent = `${said}${retry ? ' — reloading' : ' — reload the page to try again'}`;
   statusEl.classList.add('error');
   if (!retry) return;
   sessionStorage.setItem(failuresIn, String(failures + 1));
-  setTimeout(() => location.reload(), 3000);
+  setTimeout(() => location.reload(), RETRY_MS);
 }
 
 try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 } catch (error) {
   // Coming back from sleep can leave the GPU process gone, and the throw lands where nothing listens.
-  failToDraw(error?.message || 'no WebGL context', BOOT_FAILURES);
+  giveUp(`can't draw her: ${error?.message || 'no WebGL context'}`, BOOT_FAILURES);
   throw error;
 }
 document.body.prepend(renderer.domElement);
@@ -78,7 +93,7 @@ document.body.prepend(renderer.domElement);
 // on the way up. Without preventDefault the browser will not let a context come back at all.
 renderer.domElement.addEventListener('webglcontextlost', event => {
   event.preventDefault();
-  failToDraw('the graphics context was lost', CONTEXT_FAILURES);
+  giveUp("can't draw her: the graphics context was lost", CONTEXT_FAILURES);
 });
 const desktop = createDesktop(renderer, window.faceApp); // the app's click-through and dragging
 const scene = new THREE.Scene();
@@ -102,6 +117,76 @@ loader.register(parser => new VRMLoaderPlugin(parser));
 loader.register(parser => new VRMAnimationLoaderPlugin(parser));
 const animations = loadAnimations(loader); // once, for every model this page shows
 
+// Her model is megabytes, and a phone across a room spends a minute on it: a page that says nothing
+// for that minute cannot be told from one that has given up, which is the whole reason the line
+// counts while it can. No `cache: 'no-store'` here -- a reload of an 18 MB model should come off the
+// browser's own cache, not off the link.
+const MB = 1024 * 1024;
+const inMB = bytes => (bytes / MB).toFixed(1);
+const STALL_MS = 15000; // no bytes for this long is a stall, not a slow line
+async function fetchBytes(url, say) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText || 'refused'}`);
+  const total = Number(res.headers.get('Content-Length')) || 0;
+  if (!res.body) return res.arrayBuffer(); // no streaming here: one piece, however long it takes
+  const pieces = [], reader = res.body.getReader();
+  let got = 0, timer, timedOut = false;
+  // A download that stops moving does not end by itself: the fetch sits there, no error reaches the
+  // page, and the line keeps a number that will never change. That is the one failure a reader cannot
+  // tell from a slow link — measured on a phone, 2026-11-21: the size arrived, not one byte did, and
+  // the page waited. So the wire is timed here rather than trusted to the browser.
+  //
+  // The timer cancels the reader and *throws after the loop*, rather than racing a rejection against
+  // `read()`: a cancel makes `read()` resolve `done`, which settles a race first and hands the parse
+  // a truncated file — the reader then blames the file for what the link did.
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      reader.cancel().catch(() => {}); // this is what wakes the pending read below
+    }, STALL_MS);
+  };
+  say(0, total); // the size the moment it is known: "0.0 of 18.0" is a page that has begun
+  arm();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      arm(); // every piece that arrives is the link saying it is still there
+      if (done) break;
+      pieces.push(value);
+      say(got += value.byteLength, total);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  if (timedOut) throw new Error(`the download stalled at ${inMB(got)}${total ? ` of ${inMB(total)}` : ''} MB`);
+  // One buffer, in the order the pieces came, which is the order a body is delivered in.
+  const bytes = new Uint8Array(got);
+  let at = 0;
+  for (const piece of pieces) { bytes.set(piece, at); at += piece.byteLength; }
+  return bytes.buffer;
+}
+
+// <name>.vrm, downloaded and parsed, the line naming which of the two it is doing. A failure is
+// thrown with its reason rather than swallowed: a reader needs to know whether the file never
+// arrived, or arrived and could not be drawn, because only one of those is about the network.
+async function loadVRM(name) {
+  const bytes = await fetchBytes(`${encodeURIComponent(name)}.vrm`,
+    (got, total) => setStatusLine(`loading ${name}: ${inMB(got)}${total ? ` of ${inMB(total)}` : ''} MB`));
+  setStatusLine(`loading ${name}: drawing her…`);
+  const vrm = (await loader.parseAsync(bytes, '')).userData.vrm;
+  if (!vrm) throw new Error('it is not a VRM');
+  return vrm;
+}
+
+// Her notes, beside her model: {"covers": ["chest", ...]} says what her outfit covers. A model
+// without one (a 404) covers nothing, which is what this page assumed before.
+async function loadCovers(name) {
+  const notes = await fetch(`${encodeURIComponent(name)}.json`)
+    .then(r => (r.ok ? r.json() : null)).catch(() => null);
+  return Array.isArray(notes?.covers) ? notes.covers.filter(c => typeof c === 'string') : [];
+}
+
 // This page's URL with params as they are now; ?app stays ?app, not ?app=.
 function withParams() { return `?${params}`.replace(/=(?=&|$)/g, ''); }
 
@@ -123,7 +208,7 @@ function setState(value) {
   if (value === 'idle' && (state === 'thinking' || state === 'tool')) her?.expression.smileSoon(); // done: a smile
   state = LOOK[value] ? value : 'idle';
   document.documentElement.style.setProperty('--glow', LOOK[state]);
-  setStatusLine(state);
+  if (!loading && !loadError) setStatusLine(state); // a load in flight, or one that failed, owns the line
   followState();
 }
 
@@ -132,6 +217,7 @@ function setState(value) {
 // nothing on load — a browser refuses a microphone and a sound before a gesture, and a refusal reads
 // as a broken page rather than as a browser doing its job. The key below is the gesture.
 const micKey = document.getElementById('mic'); // the hint's own `m`, which says what it will do next
+const cameraKey = document.getElementById('camera'); // and its `c`, which says what it already did
 const audio = createAudio({
   // Said on the status line, where a model that will not load says its piece: a microphone the
   // browser refused has to look like a refusal, not like a switch that does nothing. And the key in
@@ -150,28 +236,54 @@ window.audio = audio; // for a transcript page and for devtools, as window.face 
 const pageCamera = createCamera({
   page: pageId, // the name its report carries, so zrb can ask this page and not the other one
   onState: ({ names, error }) => {
+    // The load is saying something more useful than a camera's name, and it says it on this line: a
+    // name painted over the number that is still counting is what made a working page and a broken
+    // one look the same. A refusal is not suppressed — that is news nobody else has.
+    if (!error && loading) return;
     setStatusLine(error || (names.length ? `camera: ${names.join(', ')}` : state), !!error);
+    // And the hint says what the press did. `c` gives the camera back on purpose — it is a grant, not
+    // a stream, and a photo is taken only when zrb asks for one — so a label that still reads "allow
+    // this camera" after it was allowed is the page hiding the half of the answer a hand cares about.
+    if (cameraKey) {
+      cameraKey.textContent = error ? 'refused'
+        : names.length ? `${names.length} camera${names.length > 1 ? 's' : ''} ready`
+        : 'allow this camera';
+    }
   },
 });
 pageCamera.publish();
 window.pageCamera = pageCamera;
 
-// Loads <name>.vrm and puts her on screen, in place of whoever was there. Null if it can't be
-// loaded (the one on screen stays); a newer show() wins over an older one still loading, which
-// frees the model it loaded for nothing.
+// The text box: a phone's keyboard is the only one in the room, so a message typed here has to reach
+// zrb the way a typed one in the terminal does. A line that will not send says so on the status line
+// and goes back into the field (see typed.js) rather than disappearing.
+const typedForm = document.getElementById('say');
+const typedInput = document.getElementById('typed');
+const typed = typedForm && typedInput ? createTyped(typedForm, typedInput, {
+  onError: error => setStatusLine(error || state, !!error),
+}) : null;
+window.typed = typed;
+
+// Loads <name>.vrm and puts her on screen, in place of whoever was there. A newer show() wins over
+// an older one still loading, which frees the model it loaded for nothing. A load that cannot be
+// made throws with its reason — the fetch, the parse, or a file that is not a VRM — because the
+// caller has a line to put it on.
 let showing = 0;
+// The line belongs to the load until the load is done: the camera publishes its names on the way up
+// and a state event can paint "idle" at any moment, and either one over a number that is still
+// counting reads as a page that is working. Those two writers check `loading`; this is what holds it.
 async function show(name) {
   const ticket = ++showing;
-  const [vrm, covers] = await Promise.all([
-    loader.loadAsync(`${encodeURIComponent(name)}.vrm`).then(g => g.userData.vrm).catch(() => null),
-    // Her notes, beside her model: {"covers": ["chest", ...]} says what her outfit covers. A
-    // model without one (a 404) covers nothing, which is what this page assumed before.
-    fetch(`${encodeURIComponent(name)}.json`).then(r => (r.ok ? r.json() : null))
-      .then(notes => Array.isArray(notes?.covers) ? notes.covers.filter(c => typeof c === 'string') : [])
-      .catch(() => []),
-  ]);
+  loading = name;
+  try {
+    return await showModel(name, ticket);
+  } finally {
+    if (ticket === showing) loading = null;
+  }
+}
+async function showModel(name, ticket) {
+  const [vrm, covers] = await Promise.all([loadVRM(name), loadCovers(name)]);
   const stale = () => { VRMUtils.deepDispose(vrm.scene); return null; };
-  if (!vrm) return null;
   if (ticket !== showing) return stale();
   VRMUtils.rotateVRM0(vrm);
   VRMUtils.removeUnnecessaryVertices(vrm.scene); // less memory and skinning work, same look
@@ -187,6 +299,7 @@ async function show(name) {
     fetch('event', { method: 'POST', body: JSON.stringify({ type: 'view', ...seen, run: viewRun, seq: ++viewSeq }) }).catch(() => {});
   }, covers);
   const mixer = new THREE.AnimationMixer(vrm.scene);
+  setStatusLine('loading her animations…'); // a stall here is a different stall from the one above
   const { clips, clipName } = clipsFor(await animations, vrm);
   if (ticket !== showing) return stale();
   const unmirrored = Object.values(clips).flatMap(Object.values).filter(c => !clipName.get(c).endsWith('-mirror'));
@@ -211,9 +324,11 @@ async function show(name) {
   params.set('model', name);
   history.replaceState(null, '', withParams());
   setState(state);
-  // She is on screen: a start that worked is not a start that failed. The context count outlives
-  // this load on purpose — a page that reloaded after a loss has to earn its clean slate by drawing.
+  // She is on screen: a start that worked is not a start that failed, and a model that loaded is not
+  // a model that would not. The context count outlives this load on purpose — a page that reloaded
+  // after a loss has to earn its clean slate by drawing.
   sessionStorage.removeItem(BOOT_FAILURES);
+  sessionStorage.removeItem(LOAD_FAILURES);
   setTimeout(() => sessionStorage.removeItem(CONTEXT_FAILURES), STABLE_MS);
   connect(name);
   return her;
@@ -225,12 +340,20 @@ async function show(name) {
 const asked = params.get('model');
 const chosen = await fetch('model').then(r => r.json()).then(m => m.chosen).catch(() => null);
 const model = asked || chosen || (await fetch('models').then(r => r.json()).catch(() => []))[0];
-if (!model || !await show(model)) {  // say so, even in the app, instead of showing nothing
-  const said = model ? `can't load ${model}.vrm from the models folder` : 'no .vrm in the models folder';
-  setStatusLine(said, true);
-  setTimeout(() => location.reload(), 5000);  // try again: the file or the server may be fixed meanwhile
-  throw new Error(said);
+try {
+  if (!model) throw new Error('no .vrm in the models folder');
+  await show(model);
+} catch (error) {  // say so, even in the app, instead of showing nothing
+  giveUp(`can't load ${model ? `${model}.vrm` : 'her'}: ${reasonOf(error)}`, LOAD_FAILURES);
+  throw error; // nothing below works without her: a listener on a model that is not there is a throw a frame
 }
+// Typing a key is not pressing it: the text box takes its own keys, so a message with an `m` in it
+// does not also start the microphone, and one with a `c` does not ask for the camera. Registered
+// first, and in the capture phase, so it runs before the listeners below rather than after them.
+addEventListener('keydown', e => {
+  const target = e.target;
+  if (target instanceof Element && target.closest('input, textarea')) e.stopImmediatePropagation();
+}, true);
 addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
 // M is the microphone, and with it her voice out of the speaker: one gesture is what a browser asks
 // for before either, and speaking to her is also how you come to hear her answer. Off turns off both:
@@ -251,6 +374,12 @@ addEventListener('keydown', e => {
   if (e.key !== 'c' || e.repeat) return;
   pageCamera.ask();
 });
+// A tap is the press a phone has instead of a key, so the two buttons in the hint bar carry the key
+// they stand for and go through these same listeners. The tap is the gesture a browser asks for
+// before a microphone or a camera — which is why nothing here needs a keyboard to be present.
+for (const button of document.querySelectorAll('#keys [data-key]')) {
+  button.addEventListener('click', () => dispatchEvent(new KeyboardEvent('keydown', { key: button.dataset.key })));
+}
 addEventListener('wheel', e => { e.preventDefault(); her.framing.onWheel(e); her.view.notice(); }, { passive: false }); // not the page's own zoom
 
 // What the user sees right now, for zrb's AvatarLook and `zrb-avatar snapshot`: this frame, from this
@@ -380,8 +509,17 @@ function onEvent({ data }) {
     const clip = clipByName(her.clips, msg.value);
     if (clip) her.motion.act(clip);
   } else if (msg.type === 'model' && typeof msg.value === 'string' && msg.value !== her.name) {
-    // Another avatar: in her place, once we know it is there (a bad name changes nothing).
-    fetch('models').then(r => r.json()).then(names => { if (names.includes(msg.value)) show(msg.value); }).catch(() => {});
+    // Another avatar: in her place, once we know it is there (a bad name changes nothing). A name
+    // that is there and will not load says so and keeps her: this page is still working.
+    fetch('models').then(r => r.json())
+      .then(names => {
+        if (!names.includes(msg.value)) return;
+        show(msg.value).catch(error => {
+          loadError = `can't load ${msg.value}.vrm: ${reasonOf(error)}`; // and setState leaves it alone
+          setStatusLine(loadError, true);
+        });
+      })
+      .catch(() => {});
   } else if (msg.type === 'pose') {
     msg.release ? her.pose.release() : her.pose.set(msg);
   } else if (msg.type === 'cover') {

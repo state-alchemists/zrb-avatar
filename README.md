@@ -52,7 +52,11 @@ windows reload by themselves.
   terminal).
 - The order does not matter: the window waits for the server, reloads when the server restarts, and
   zrb skips sending while either is missing.
-- If a model cannot be loaded, the window says so in red and tries again every few seconds.
+- If a model cannot be loaded, the window says so in red, naming the file and the step that failed,
+  and tries again every few seconds. While a model is still arriving the line counts its megabytes,
+  so a phone on a slow link shows how far it has got rather than a black page. If the count stops
+  moving for fifteen seconds, the line says the download stalled — a fetch that hangs never errors
+  by itself, and waiting for ever is the one failure a reader cannot tell from a slow link.
 
 ## Her states
 
@@ -404,7 +408,8 @@ do not commit or share them.
 | Key | What it does |
 | --- | --- |
 | `m` | Microphone and speaker at once: zrb hears this device, and her voice comes out of it. Again turns both off. |
-| `c` | Allow this page's camera, so zrb can ask for a photo by name (`/photo phone-back`, `zrb-avatar frame`). |
+| `c` | Allow this page's camera, so zrb can ask for a photo by name (`/photo phone-back`, `zrb-avatar frame`). The hint then reads how many cameras it found: the press is a grant, not a stream. |
+| *type* | The box along the bottom edge: a line typed there is a message to zrb, sent with Enter, and it arrives as a turn. It is how a phone talks to her with no terminal in reach. |
 | ← → | Orbit around her. |
 | ↑ ↓ | Orbit over her head or under her feet, all the way round. |
 | Shift+↑ / Shift+↓ | Move the camera's focus up or down her body (to her face, say). |
@@ -542,9 +547,14 @@ reads as a broken page:
   back, so a page with the microphone off is not still asking for silence to play.
 - `c` gives it the camera. A browser hides a phone's camera names until a page has been allowed
   one, so this is also how `/photo` comes to have a name to ask for; the status line says what it
-  found, and after that `/photo back camera` is enough. The camera opens for one photo and closes
-  again — a phone in a pocket is not filming — and a page that cannot take one says why, which is
-  the sentence zrb repeats under `/photo`.
+  found, and the hint then says how many cameras are ready, but the camera itself is used only when
+  zrb asks for a photo. It opens for one photo and closes again — a phone in a pocket is not
+  filming — and a page that cannot take one says why, which is the sentence zrb repeats under
+  `/photo`.
+- *typing* (the box above the buttons) is the third thing a page gives zrb: a line typed there is a
+  message, sent with Enter, and it becomes a turn as typing into the terminal does. A phone has a
+  keyboard of its own, so this is how a hand with no terminal in reach talks to her; the line is cut
+  to 4000 characters, and a newline inside it is joined rather than made into a second message.
 
 Two pages can be open at once — the laptop and the phone — and each one keeps its own camera names:
 a photo is asked of the page that named the camera, and a page that answers "I have no such camera"
@@ -556,10 +566,12 @@ first. A name only one page reports is offered exactly as it was.
 
 ### Which half lives where
 
-This repository is the page and the routes it speaks: `zrb_avatar/server.py:1299` hands `/audio/in`
-to zrb's dictation, `server.py:1448` takes `/say` from its speech player, and `server.py:1315` and
-`server.py:1317` answer `/frame` and `/frame/devices` for a camera on the page. The browser end of
-those is `zrb_avatar/js/audio.js` and `zrb_avatar/js/camera.js`.
+This repository is the page and the routes it speaks: `zrb_avatar/server.py:1303` hands `/audio/in`
+to zrb's dictation, `server.py:1454` takes `/say` from its speech player, `server.py:1456` takes
+`/text` from the page's text box, `server.py:1307` hands the typed lines on at `/text/in`, and
+`server.py:1321` and `server.py:1323` answer `/frame` and `/frame/devices` for a camera on the page.
+The browser end of those is `zrb_avatar/js/audio.js`, `zrb_avatar/js/camera.js` and
+`zrb_avatar/js/typed.js`.
 
 Honouring `ZRB_LLM_VOICE_REMOTE_URL` is zrb's, and nothing here repeats that decision. zrb reads it
 at `src/zrb/llm/util/face_server.py:46`, and three places act on it:
