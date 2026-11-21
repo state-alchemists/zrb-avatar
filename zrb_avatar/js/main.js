@@ -117,6 +117,10 @@ function resize() {
 // text box over her boots, and the box is fixed at the foot with nothing she is drawn into going under
 // it: face.html measures that stack into --bottom-h, so the number is read here rather than guessed.
 function freeHeight() {
+  // The app has no foot: its window is her body and carries no controls, so the whole window is the
+  // canvas. The class arrives at the top of this module, before anything is measured — reading
+  // --bottom-h there would shorten the app's canvas by a stack it never shows.
+  if (document.documentElement.classList.contains('app')) return innerHeight;
   const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-h')) || 0;
   return Math.max(120, innerHeight - bar);
 }

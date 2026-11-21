@@ -1498,6 +1498,17 @@ assert "innerHeight * (innerHeight > innerWidth" not in (server.HERE / "js" / "f
 assert "dispatchEvent(new Event('resize'))" in page_html, (
     "a stack of a different height never tells the canvas it changed"
 )
+# The app is the exception both ways: its window carries no controls, so the canvas is the whole of it,
+# and the one line the app has for a failure is not hidden along with them.
+assert "classList.contains('app')" in page, (
+    "the app's canvas is shortened by a stack it does not show"
+)
+assert not re.search(r"html\.app #bottom\s*\{[^}]*display:\s*none", page_html), (
+    "the app's own error line is hidden with the controls"
+)
+assert re.search(r"html\.app #status\.error\s*\{[^}]*display:\s*block", page_html), (
+    "a failure in the app is drawn on a page that cannot say it"
+)
 # And the page speaks to whoever is running it. "type to her" is true of this avatar and not of the next
 # user's — the same fault the README has — so what a reader sees names the avatar, or nothing at all.
 visible_html = re.sub(r"<!--.*?-->", "", page_html, flags=re.S)
