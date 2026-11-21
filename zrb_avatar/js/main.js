@@ -23,8 +23,38 @@ const FPS = Number(params.get('fps')) || 30;
 if (params.has('app')) document.documentElement.classList.add('app');
 const statusEl = document.getElementById('status');
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+// What the page says when it cannot draw her. "loading…" is the line's own text, and a page that
+// never replaces it says nothing at all: a GPU that a sleep or a driver reset took away leaves the
+// window black, and the status line is the only place a failure can be seen. Retried twice, then
+// left saying so — a reload that fails again is a loop, not a recovery.
+const BOOT_FAILURES = 'zrb-avatar-boot-failures';
+function failToDraw(reason) {
+  const failures = Number(sessionStorage.getItem(BOOT_FAILURES) || '0');
+  const retry = failures < 2;
+  statusEl.textContent = `can't draw her: ${reason}${retry ? ' — reloading' : ' — reload the page to try again'}`;
+  statusEl.classList.add('error');
+  if (!retry) return;
+  sessionStorage.setItem(BOOT_FAILURES, String(failures + 1));
+  setTimeout(() => location.reload(), 3000);
+}
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+} catch (error) {
+  // Coming back from sleep can leave the GPU process gone, and the throw lands where nothing listens.
+  failToDraw(error?.message || 'no WebGL context');
+  throw error;
+}
 document.body.prepend(renderer.domElement);
+// A context is lost when the GPU goes away under a page that was already drawing: the page keeps
+// running, the canvas goes black, and nothing on the status line changes. It cannot be revived in
+// place, so the whole recovery is a reload — the model, the camera names and her mood are rebuilt
+// on the way up. Without preventDefault the browser will not let a context come back at all.
+renderer.domElement.addEventListener('webglcontextlost', event => {
+  event.preventDefault();
+  failToDraw('the graphics context was lost');
+});
 const desktop = createDesktop(renderer, window.faceApp); // the app's click-through and dragging
 const scene = new THREE.Scene();
 const light = new THREE.DirectionalLight(0xffffff, Math.PI);
@@ -160,6 +190,7 @@ async function show(name) {
   params.set('model', name);
   history.replaceState(null, '', withParams());
   setState(state);
+  sessionStorage.removeItem(BOOT_FAILURES); // she is on screen: the next failure is a new one
   connect(name);
   return her;
 }

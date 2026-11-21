@@ -1453,6 +1453,13 @@ for key in re.findall(r"e\.key !== '([^']+)'", page):
     assert f"<b>{key}</b>" in page_html, f"the page handles {key!r} and never says so"
 assert "click the page" in page_html
 
+# A page that cannot draw her says so rather than sitting on the status line's own "loading…" for
+# ever: a GPU a sleep took away leaves the window black and the line unchanged, and the line is the
+# only place a failure can be seen. Both ways in are guarded — the renderer that throws as it is
+# made, and the context that is lost under a page that was already drawing.
+assert "webglcontextlost" in page, "a lost context leaves the window black and silent"
+assert "failToDraw(" in page, "nothing puts a drawing failure on the status line"
+
 # Every name AvatarPose (zrb_init.py) offers is one the page (js/pose.js) knows.
 tools = (server.HERE / "zrb_init.py").read_text()
 pose_js = (server.HERE / "js" / "pose.js").read_text()
