@@ -121,6 +121,13 @@ function freeHeight() {
   // canvas. The class arrives at the top of this module, before anything is measured — reading
   // --bottom-h there would shorten the app's canvas by a stack it never shows.
   if (document.documentElement.classList.contains('app')) return innerHeight;
+  // Where the stack actually is, not the window less a number. On an Android phone the fixed stack sits
+  // at the visual bottom while `innerHeight` reports the taller layout viewport, so the arithmetic left
+  // the canvas about thirty CSS pixels too tall and her boots were drawn behind the text box -- a fault
+  // that a desktop browser and Chrome's emulation both hide. The stack's own top is the free area.
+  const stack = document.getElementById('bottom');
+  const top = stack ? stack.getBoundingClientRect().top : 0;
+  if (top > 0) return Math.max(120, Math.round(top));
   const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-h')) || 0;
   return Math.max(120, innerHeight - bar);
 }
@@ -234,6 +241,7 @@ function setState(value) {
 // as a broken page rather than as a browser doing its job. The key below is the gesture.
 const micKey = document.getElementById('mic'); // the hint's own `m`, which says what it will do next
 const cameraKey = document.getElementById('camera'); // and its `c`, which says what it already did
+const firstKey = document.querySelector('#keys .first'); // the line that says how to start at all
 const audio = createAudio({
   // Said on the status line, where a model that will not load says its piece: a microphone the
   // browser refused has to look like a refusal, not like a switch that does nothing. And the key in
@@ -242,6 +250,9 @@ const audio = createAudio({
   onState: ({ mic, error }) => {
     setStatusLine(error || state, !!error);
     if (micKey) micKey.textContent = error ? 'refused' : mic ? 'stop' : 'talk and listen';
+    // And the manual is done once it has been used: "tap or click the page, then:" is advice for a page
+    // nobody has touched, and it was still standing under a phone whose ears were already on.
+    if (firstKey && mic) firstKey.hidden = true;
   },
 });
 window.audio = audio; // for a transcript page and for devtools, as window.face is

@@ -39,6 +39,8 @@
   }
   #keys b { color: var(--glow); font-weight: 600; }
   #keys .first { display: block; color: #ffd76a; }
+  /* The line above is advice for a page nobody has touched; js/main.js hides it once the ears are on. */
+  #keys .first[hidden] { display: none; }
   /* Two of the entries are buttons: a phone has no keyboard to press, and a tap is both the gesture a
      browser wants before a microphone and the only way in. The rest need keys a phone does not have. */
   #keys button {

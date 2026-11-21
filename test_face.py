@@ -1503,6 +1503,12 @@ assert "dispatchEvent(new Event('resize'))" in page_html, (
 assert "classList.contains('app')" in page, (
     "the app's canvas is shortened by a stack it does not show"
 )
+# And on a phone the stack's own place is the free area, not the window less a number: an Android
+# browser puts the fixed stack at the visual bottom while `innerHeight` reports the taller layout
+# viewport, so the arithmetic drew her a boot's width behind the text box, on the phone only.
+assert "stack.getBoundingClientRect().top" in page, (
+    "the canvas's height is arithmetic again, and a phone's viewport is not that arithmetic"
+)
 assert not re.search(r"html\.app #bottom\s*\{[^}]*display:\s*none", page_html), (
     "the app's own error line is hidden with the controls"
 )
@@ -1555,6 +1561,11 @@ assert "touch-action: none" in page_html, "the browser takes the drag for a scro
 # it is for — so a label that still reads "allow this camera" after it was allowed hides the answer.
 assert 'id="camera"' in page_html and 'getElementById(\'camera\')' in page, (
     "the camera's hint never says the camera was allowed"
+)
+# The advice line is for a page nobody has touched: it was still standing under a phone that was already
+# listening, saying "tap or click the page, then:" to someone who had.
+assert "firstKey.hidden = true" in page and ".first[hidden]" in page_html, (
+    "the page goes on telling a hand to tap a page that has been tapped"
 )
 
 # The line channel as the server keeps it: one message a line, a blank one refused, and what was
