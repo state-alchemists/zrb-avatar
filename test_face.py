@@ -416,6 +416,28 @@ assert (
 )  # hers added to ours
 assert "rest" in pools["idle"]
 assert get("/mine.vrm") == (200, b"mine")
+# A phone that lost its link at six of eighteen megabytes asks for the rest: the model route answers
+# a byte range with 206 and the whole size it belongs to, so a stalled download resumes instead of
+# starting the file again. A range it cannot serve is the whole file, which is always a correct
+# answer to the question.
+def get_range(path: str, asked: str | None = None) -> tuple[int, dict[str, str], bytes]:
+    client.request("GET", path, headers={"Range": asked} if asked else {})
+    response = client.getresponse()
+    return response.status, dict(response.getheaders()), response.read()
+
+
+status, headers, body = get_range("/mine.vrm", "bytes=2-")
+assert (status, body) == (206, b"ne"), "a range is answered with something other than the rest"
+assert (
+    headers.get("Content-Range") == "bytes 2-3/4"
+), "a resumed answer does not say which part of the file it is"
+status, _, body = get_range("/mine.vrm", "bytes=0-1")
+assert (status, body) == (206, b"mi"), "a bounded range is not the bytes it names"
+status, _, body = get_range("/mine.vrm", "bytes=9-")
+assert (status, body) == (200, b"mine"), "a range past the end is not the whole file"
+assert (
+    get_range("/mine.vrm")[1].get("Accept-Ranges") == "bytes"
+), "a page is never told it may resume"
 
 # Her notes live beside her model: {"covers": [...]} in <name>.json says what her outfit covers,
 # so a close look at a hoodie is no longer read the same way as one at bare skin. A model with no
@@ -1467,6 +1489,62 @@ page_html = (server.HERE / "face.html").read_text(encoding="utf-8")
 for key in re.findall(r"e\.key !== '([^']+)'", page):
     assert f"<b>{key}</b>" in page_html, f"the page handles {key!r} and never says so"
 assert "click the page" in page_html
+# The foot of the page is one stack in flow, whose height is measured rather than guessed. The status
+# line used to be placed by its own `bottom`, a number tuned for two buttons and a hint: the box that
+# typed lines added arrived underneath it and the line ended up behind the box's top border, reported
+# from the phone on 2026-11-21 as "the UI is a bit misaligned".
+assert 'id="bottom"' in page_html and "--bottom-h" in page_html, (
+    "the status line and the keys are placed by two numbers that can drift apart"
+)
+assert not re.search(r"#status\s*\{[^}]*\bbottom\s*:", page_html), (
+    "the status line is pinned to a number again, and the keys' height is a guess"
+)
+assert re.search(r"#subtitle\s*\{[^}]*bottom:\s*calc\(var\(--bottom-h", page_html), (
+    "a caption lands on the keys instead of clearing them"
+)
+# And nothing she is drawn into goes under the controls: the canvas is the window less that stack, or
+# the text box sits over her boots with her feet cropped behind it. The frame is what she is fitted to,
+# so it is told the canvas's size rather than the window's.
+assert "function freeHeight()" in page and "renderer.setSize(innerWidth, freeHeight())" in page, (
+    "the canvas runs the whole height of the window, so the box covers her feet"
+)
+assert re.search(r"createFraming\(camera[\s\S]{0,300}?window\.faceApp\?\.resize,[\s\S]{0,300}?viewport\)", page), (
+    "she is fitted to the window rather than to the canvas the controls leave"
+)
+assert "const viewport = () => [innerWidth, freeHeight()]" in page, (
+    "the canvas and the framing disagree about the area she is drawn into"
+)
+assert "innerHeight * (innerHeight > innerWidth" not in (server.HERE / "js" / "framing.js").read_text(), (
+    "the framing sizes her by the window again"
+)
+assert "dispatchEvent(new Event('resize'))" in page_html, (
+    "a stack of a different height never tells the canvas it changed"
+)
+# The app is the exception both ways: its window carries no controls, so the canvas is the whole of it,
+# and the one line the app has for a failure is not hidden along with them.
+assert "classList.contains('app')" in page, (
+    "the app's canvas is shortened by a stack it does not show"
+)
+# And on a phone the stack's own place is the free area, not the window less a number: an Android
+# browser puts the fixed stack at the visual bottom while `innerHeight` reports the taller layout
+# viewport, so the arithmetic drew her a boot's width behind the text box, on the phone only.
+assert "stack.getBoundingClientRect().top" in page, (
+    "the canvas's height is arithmetic again, and a phone's viewport is not that arithmetic"
+)
+assert not re.search(r"html\.app #bottom\s*\{[^}]*display:\s*none", page_html), (
+    "the app's own error line is hidden with the controls"
+)
+assert re.search(r"html\.app #status\.error\s*\{[^}]*display:\s*block", page_html), (
+    "a failure in the app is drawn on a page that cannot say it"
+)
+# And the page speaks to whoever is running it. "type to her" is true of this avatar and not of the next
+# user's — the same fault the README has — so what a reader sees names the avatar, or nothing at all.
+visible_html = re.sub(r"<!--.*?-->", "", page_html, flags=re.S)
+for phrase in ("type to her", "a message to her", "her face", "her feet", "drawing her", "loading her animations"):
+    assert phrase not in visible_html, f"the page says {phrase!r}, which is one user's avatar"
+code_lines = "\n".join(line for line in page.splitlines() if not line.strip().startswith("//"))
+for phrase in ("drawing her", "loading her animations", "can't draw her", "can't load her"):
+    assert phrase not in code_lines, f"the status line says {phrase!r}, which is one user's avatar"
 # A phone has no keyboard, and two things follow from that. It must not shrink the page to 980 pixels
 # and hold it there — reported from the phone on 2026-11-21 as "too small, I have to zoom in a lot".
 assert "width=device-width" in page_html, "a phone shrinks the page instead of fitting it"
@@ -1505,6 +1583,11 @@ assert "touch-action: none" in page_html, "the browser takes the drag for a scro
 # it is for — so a label that still reads "allow this camera" after it was allowed hides the answer.
 assert 'id="camera"' in page_html and 'getElementById(\'camera\')' in page, (
     "the camera's hint never says the camera was allowed"
+)
+# The advice line is for a page nobody has touched: it was still standing under a phone that was already
+# listening, saying "tap or click the page, then:" to someone who had.
+assert "firstKey.hidden = true" in page and ".first[hidden]" in page_html, (
+    "the page goes on telling a hand to tap a page that has been tapped"
 )
 
 # The line channel as the server keeps it: one message a line, a blank one refused, and what was
@@ -1581,6 +1664,14 @@ assert "loading ${name}:" in page, "nothing counts her model as it arrives"
 # the page waited. So the wire is timed, and a stall has a sentence of its own.
 assert "STALL_MS" in page, "a stalled download sits at a number that will never change"
 assert "the download stalled at" in page, "a stall says nothing a reader can act on"
+# And a stall is not the end of the load: the phone's screen went off at six of eighteen megabytes
+# and every try after it asked for the file from the start, so a reload began the minute again. The
+# rest is asked for, and the screen is held on while a model is on its way.
+assert "STALL_TRIES" in page, "one stall ends a download that a phone could have finished"
+assert "Range: `bytes=${from}-`" in page, "a resumed download asks for the whole file again"
+assert "res.status !== 206" in page, "a page appends the whole file to the part it already has"
+assert "navigator.wakeLock" in page, "the screen goes off and the download goes with it"
+assert "sleepAgain();" in page, "the screen is held on after the model arrived"
 # And the line belongs to the load while a load is in flight: the camera publishes its names on the way
 # up and a state event can paint "idle" over a number that is still counting, which is what made the
 # phone's working page and broken page look the same. Measured, not guessed — the first version of the

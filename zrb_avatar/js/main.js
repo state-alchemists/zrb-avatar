@@ -87,7 +87,7 @@ try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 } catch (error) {
   // Coming back from sleep can leave the GPU process gone, and the throw lands where nothing listens.
-  giveUp(`can't draw her: ${error?.message || 'no WebGL context'}`, BOOT_FAILURES);
+  giveUp(`can't draw the avatar: ${error?.message || 'no WebGL context'}`, BOOT_FAILURES);
   throw error;
 }
 document.body.prepend(renderer.domElement);
@@ -97,7 +97,7 @@ document.body.prepend(renderer.domElement);
 // on the way up. Without preventDefault the browser will not let a context come back at all.
 renderer.domElement.addEventListener('webglcontextlost', event => {
   event.preventDefault();
-  giveUp("can't draw her: the graphics context was lost", CONTEXT_FAILURES);
+  giveUp("can't draw the avatar: the graphics context was lost", CONTEXT_FAILURES);
 });
 const desktop = createDesktop(renderer, window.faceApp); // the app's click-through and dragging
 const scene = new THREE.Scene();
@@ -110,9 +110,28 @@ function resize() {
   // again on every resize: page zoom and moving to another display change devicePixelRatio, and a
   // stale one draws her blurry, stretched. Sharper than 2x is invisible at this size.
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setSize(innerWidth, freeHeight());
   frame();
 }
+// The canvas is the part of the page the controls leave. Running it the whole height of a phone put the
+// text box over her boots, and the box is fixed at the foot with nothing she is drawn into going under
+// it: face.html measures that stack into --bottom-h, so the number is read here rather than guessed.
+function freeHeight() {
+  // The app has no foot: its window is her body and carries no controls, so the whole window is the
+  // canvas. The class arrives at the top of this module, before anything is measured — reading
+  // --bottom-h there would shorten the app's canvas by a stack it never shows.
+  if (document.documentElement.classList.contains('app')) return innerHeight;
+  // Where the stack actually is, not the window less a number. On an Android phone the fixed stack sits
+  // at the visual bottom while `innerHeight` reports the taller layout viewport, so the arithmetic left
+  // the canvas about thirty CSS pixels too tall and her boots were drawn behind the text box -- a fault
+  // that a desktop browser and Chrome's emulation both hide. The stack's own top is the free area.
+  const stack = document.getElementById('bottom');
+  const top = stack ? stack.getBoundingClientRect().top : 0;
+  if (top > 0) return Math.max(120, Math.round(top));
+  const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-h')) || 0;
+  return Math.max(120, innerHeight - bar);
+}
+const viewport = () => [innerWidth, freeHeight()];
 addEventListener('resize', resize);
 resize();
 
@@ -128,43 +147,99 @@ const animations = loadAnimations(loader); // once, for every model this page sh
 const MB = 1024 * 1024;
 const inMB = bytes => (bytes / MB).toFixed(1);
 const STALL_MS = 15000; // no bytes for this long is a stall, not a slow line
+const STALL_TRIES = 6; // and each stall asks for the bytes that did not arrive, not the file again
+
+// A phone that dims its screen stops the download with it — measured here on 2026-11-21: six of
+// eighteen megabytes and then nothing, with no error the page could see. The screen is kept on while
+// a model is on its way, and the tries below are what happens when it goes off anyway.
+let wakeLock = null, keepsAwake = false;
+async function askAwake() {
+  if (!keepsAwake || document.visibilityState !== 'visible' || !navigator.wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+  } catch {
+    wakeLock = null; // a browser that will not hold it is a browser whose page still loads
+  }
+}
+// The system takes the lock away the moment the page is hidden, so it is asked for again on return.
+async function wakeUp() {
+  keepsAwake = true;
+  addEventListener('visibilitychange', askAwake);
+  await askAwake();
+}
+function sleepAgain() {
+  keepsAwake = false;
+  removeEventListener('visibilitychange', askAwake);
+  const held = wakeLock;
+  wakeLock = null;
+  Promise.resolve(held?.release()).catch(() => {});
+}
+// The bytes of `url`, asking for the rest each time the link goes quiet. A stall is not an error:
+// the fetch has not failed, it has stopped moving, and what already arrived is worth keeping.
 async function fetchBytes(url, say) {
-  const res = await fetch(url);
+  const whole = { pieces: [], got: 0, total: 0 };
+  for (let tries = 0; tries < STALL_TRIES; tries++) {
+    if (await readAttempt(url, whole, say)) return joined(whole);
+  }
+  throw new Error(`the download stalled at ${inMB(whole.got)}${whole.total ? ` of ${inMB(whole.total)}` : ''} MB`);
+}
+// One go at the rest of the file, from what `whole` already holds. True when the body ended.
+async function readAttempt(url, whole, say) {
+  const from = whole.got;
+  const res = await fetch(url, from ? { headers: { Range: `bytes=${from}-` } } : undefined);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText || 'refused'}`);
-  const total = Number(res.headers.get('Content-Length')) || 0;
-  if (!res.body) return res.arrayBuffer(); // no streaming here: one piece, however long it takes
-  const pieces = [], reader = res.body.getReader();
-  let got = 0, timer, timedOut = false;
-  // A download that stops moving does not end by itself: the fetch sits there, no error reaches the
-  // page, and the line keeps a number that will never change. That is the one failure a reader cannot
-  // tell from a slow link — measured on a phone, 2026-11-21: the size arrived, not one byte did, and
-  // the page waited. So the wire is timed here rather than trusted to the browser.
-  //
-  // The timer cancels the reader and *throws after the loop*, rather than racing a rejection against
-  // `read()`: a cancel makes `read()` resolve `done`, which settles a race first and hands the parse
-  // a truncated file — the reader then blames the file for what the link did.
+  // A server that cannot resume answers with the whole file, so this attempt starts over rather than
+  // appending the beginning of the file to the end of the part already held.
+  if (from && res.status !== 206) {
+    whole.pieces = [];
+    whole.got = 0;
+  }
+  const length = Number(res.headers.get('Content-Length')) || 0;
+  whole.total = from && res.status === 206 ? from + length : length;
+  say(whole.got, whole.total); // the size the moment it is known: "0.0 of 18.0" is a page that has begun
+  if (!res.body) return onePiece(res, whole, say); // no streaming here: one piece, however long it takes
+  return drain(res, whole, say);
+}
+// The body, piece by piece, ending when it ends or when it goes quiet.
+//
+// A download that stops moving does not end by itself: the fetch sits there, no error reaches the
+// page, and the line keeps a number that will never change — measured on a phone, 2026-11-21: the
+// size arrived, not one byte did, and the page waited. So the wire is timed here rather than trusted
+// to the browser. The timer cancels the reader and the answer is read after the loop, rather than
+// racing a rejection against `read()`: a cancel makes `read()` resolve `done`, which settles a race
+// first and hands the parse a truncated file — the reader then blames the file for what the link did.
+async function drain(res, whole, say) {
+  const reader = res.body.getReader();
+  let timer, quiet = false;
   const arm = () => {
     clearTimeout(timer);
     timer = setTimeout(() => {
-      timedOut = true;
+      quiet = true;
       reader.cancel().catch(() => {}); // this is what wakes the pending read below
     }, STALL_MS);
   };
-  say(0, total); // the size the moment it is known: "0.0 of 18.0" is a page that has begun
   arm();
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      arm(); // every piece that arrives is the link saying it is still there
       if (done) break;
-      pieces.push(value);
-      say(got += value.byteLength, total);
+      arm(); // every piece that arrives is the link saying it is still there
+      whole.pieces.push(value);
+      say(whole.got += value.byteLength, whole.total);
     }
   } finally {
     clearTimeout(timer);
   }
-  if (timedOut) throw new Error(`the download stalled at ${inMB(got)}${total ? ` of ${inMB(total)}` : ''} MB`);
-  // One buffer, in the order the pieces came, which is the order a body is delivered in.
+  return !quiet && (!whole.total || whole.got >= whole.total);
+}
+async function onePiece(res, whole, say) {
+  const piece = new Uint8Array(await res.arrayBuffer());
+  whole.pieces.push(piece);
+  say(whole.got += piece.byteLength, whole.total);
+  return !whole.total || whole.got >= whole.total;
+}
+// One buffer, in the order the pieces came, which is the order a body is delivered in.
+function joined({ pieces, got }) {
   const bytes = new Uint8Array(got);
   let at = 0;
   for (const piece of pieces) { bytes.set(piece, at); at += piece.byteLength; }
@@ -175,12 +250,17 @@ async function fetchBytes(url, say) {
 // thrown with its reason rather than swallowed: a reader needs to know whether the file never
 // arrived, or arrived and could not be drawn, because only one of those is about the network.
 async function loadVRM(name) {
-  const bytes = await fetchBytes(`${encodeURIComponent(name)}.vrm`,
-    (got, total) => setStatusLine(`loading ${name}: ${inMB(got)}${total ? ` of ${inMB(total)}` : ''} MB`));
-  setStatusLine(`loading ${name}: drawing her…`);
-  const vrm = (await loader.parseAsync(bytes, '')).userData.vrm;
-  if (!vrm) throw new Error('it is not a VRM');
-  return vrm;
+  await wakeUp(); // the screen goes off and the download goes with it; see wakeUp above
+  try {
+    const bytes = await fetchBytes(`${encodeURIComponent(name)}.vrm`,
+      (got, total) => setStatusLine(`loading ${name}: ${inMB(got)}${total ? ` of ${inMB(total)}` : ''} MB`));
+    setStatusLine(`loading ${name}: drawing…`);
+    const vrm = (await loader.parseAsync(bytes, '')).userData.vrm;
+    if (!vrm) throw new Error('it is not a VRM');
+    return vrm;
+  } finally {
+    sleepAgain();
+  }
 }
 
 // Her notes, beside her model: {"covers": ["chest", ...]} says what her outfit covers. A model
@@ -222,6 +302,7 @@ function setState(value) {
 // as a broken page rather than as a browser doing its job. The key below is the gesture.
 const micKey = document.getElementById('mic'); // the hint's own `m`, which says what it will do next
 const cameraKey = document.getElementById('camera'); // and its `c`, which says what it already did
+const firstKey = document.querySelector('#keys .first'); // the line that says how to start at all
 const audio = createAudio({
   // Said on the status line, where a model that will not load says its piece: a microphone the
   // browser refused has to look like a refusal, not like a switch that does nothing. And the key in
@@ -230,6 +311,9 @@ const audio = createAudio({
   onState: ({ mic, error }) => {
     setStatusLine(error || state, !!error);
     if (micKey) micKey.textContent = error ? 'refused' : mic ? 'stop' : 'talk and listen';
+    // And the manual is done once it has been used: "tap or click the page, then:" is advice for a page
+    // nobody has touched, and it was still standing under a phone whose ears were already on.
+    if (firstKey && mic) firstKey.hidden = true;
   },
 });
 window.audio = audio; // for a transcript page and for devtools, as window.face is
@@ -317,12 +401,13 @@ async function showModel(name, ticket) {
     fetch('event', { method: 'POST', body: JSON.stringify({ type: 'view', ...seen, run: viewRun, seq: ++viewSeq }) }).catch(() => {});
   }, covers);
   const mixer = new THREE.AnimationMixer(vrm.scene);
-  setStatusLine('loading her animations…'); // a stall here is a different stall from the one above
+  setStatusLine('loading the animations…'); // a stall here is a different stall from the one above
   const { clips, clipName } = clipsFor(await animations, vrm);
   if (ticket !== showing) return stale();
   const unmirrored = Object.values(clips).flatMap(Object.values).filter(c => !clipName.get(c).endsWith('-mirror'));
   const framing = createFraming(camera, measureReach(vrm, mixer, unmirrored),
-    window.faceApp?.resize); // the desktop app's preload lets the page size its window
+    window.faceApp?.resize, // the desktop app's preload lets the page size its window
+    viewport); // and the canvas is what she is fitted to: the window less the foot of the page
 
   // The swap: the old model out (its gaze target too), the new one in, her mood carried over.
   if (her) {
@@ -362,7 +447,7 @@ try {
   if (!model) throw new Error('no .vrm in the models folder');
   await show(model);
 } catch (error) {  // say so, even in the app, instead of showing nothing
-  giveUp(`can't load ${model ? `${model}.vrm` : 'her'}: ${reasonOf(error)}`, LOAD_FAILURES);
+  giveUp(`can't load ${model ? `${model}.vrm` : 'the avatar'}: ${reasonOf(error)}`, LOAD_FAILURES);
   throw error; // nothing below works without her: a listener on a model that is not there is a throw a frame
 }
 // Typing a key is not pressing it: the text box takes its own keys, so a message with an `m` in it

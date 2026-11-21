@@ -127,6 +127,25 @@ MODEL_DIRS = _dirs(env_name("MODELS"), "models")
 ANIM_DIRS = _dirs(env_name("ANIMS"), "anim", HERE / "anim")
 NAME = re.compile(r"[\w .()-]+")  # a file name without its extension; no slashes
 POOL = re.compile(r"[\w-]+")
+# The one byte range a page asks for: the rest of a file, from the byte it got to.
+RANGE = re.compile(r"bytes=(\d+)-(\d*)")
+
+
+def asked_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """The byte range a request asks for, as inclusive bounds, or None for the whole body.
+
+    Only `bytes=N-` and `bytes=N-M` are read, which is what a page resuming a download sends. A
+    header that cannot be served — malformed, a suffix range, a start at or past the end — is
+    answered with the whole body, which is always a correct answer to it.
+    """
+    match = RANGE.fullmatch((header or "").strip())
+    if match is None:
+        return None
+    start = int(match.group(1))
+    end = int(match.group(2)) if match.group(2) else size - 1
+    if start >= size or end < start:
+        return None
+    return start, min(end, size - 1)
 MAX_EVENT_BYTES = 65536
 MAX_SNAPSHOT_BYTES = 16_000_000  # a PNG as a data: URL, plus what she is doing
 SNAPSHOT_SECONDS = 6.0  # how long GET /snapshot waits for a page to answer
@@ -1366,6 +1385,8 @@ class Handler(BaseHTTPRequestHandler):
             file = None
         if file is None:
             return self.send_error(404)
+        if path.endswith(".vrm"):  # the one file big enough that a resume is worth asking for
+            return self._send_model(file.read_bytes())
         self._send(file.read_bytes(), "application/octet-stream")
 
     def _length(self, limit: int) -> int | None:
@@ -1387,12 +1408,35 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, value) -> None:
         self._send(json.dumps(value).encode(), "application/json")
 
-    def _send(self, body: bytes, content_type: str):
+    def _send(self, body: bytes, content_type: str, extra: dict[str, str] | None = None):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (extra or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_model(self, body: bytes):
+        """Her model, or the rest of it when the page asks for a byte range.
+
+        A phone whose screen went off drops the connection at whatever it had got — six of eighteen
+        megabytes, measured 2026-11-21 — and the page comes back asking for the bytes after those
+        rather than for the whole file again. The range is answered `206` with the size it belongs
+        to, and the full answer says `Accept-Ranges` so a page knows the question can be asked.
+        """
+        asked = asked_range(self.headers.get("Range"), len(body))
+        if asked is None:
+            return self._send(body, "application/octet-stream", {"Accept-Ranges": "bytes"})
+        start, end = asked
+        part = body[start : end + 1]
+        self.send_response(206)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(part)))
+        self.send_header("Content-Range", f"bytes {start}-{end}/{len(body)}")
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+        self.wfile.write(part)
 
     def _body(self):
         """The request body as it arrives, however the caller measured it.
