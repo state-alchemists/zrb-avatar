@@ -1453,6 +1453,24 @@ for key in re.findall(r"e\.key !== '([^']+)'", page):
     assert f"<b>{key}</b>" in page_html, f"the page handles {key!r} and never says so"
 assert "click the page" in page_html
 
+# A page that cannot draw her says so rather than sitting on the status line's own "loading…" for
+# ever: a GPU a sleep took away leaves the window black and the line unchanged, and the line is the
+# only place a failure can be seen. Both ways in are guarded — the renderer that throws as it is
+# made, and the context that is lost under a page that was already drawing.
+assert "webglcontextlost" in page, "a lost context leaves the window black and silent"
+assert "failToDraw(" in page, "nothing puts a drawing failure on the status line"
+# One counter for both failures is the bug this pair prevents: a context lost after a page loaded
+# would be cleared by the next load, and a GPU resetting every minute would reload for ever.
+assert "CONTEXT_FAILURES" in page and "BOOT_FAILURES" in page
+assert "removeItem(BOOT_FAILURES)" in page and "removeItem(CONTEXT_FAILURES)" in page
+# And the message has to survive the page that keeps running: a state, camera or connection event
+# arriving after the retries are spent would paint "idle" under a black window, which reads as working.
+assert "drawFailure" in page, "nothing stops a status event from replacing a drawing failure"
+assert "setAnimationLoop(null)" in page, "the loop keeps rendering into a context that is gone"
+assert page.count("statusEl.textContent = ") == 2, (
+    "only setStatus and failToDraw may write the line; every other writer goes through the latch"
+)
+
 # Every name AvatarPose (zrb_init.py) offers is one the page (js/pose.js) knows.
 tools = (server.HERE / "zrb_init.py").read_text()
 pose_js = (server.HERE / "js" / "pose.js").read_text()
