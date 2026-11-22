@@ -1747,6 +1747,28 @@ for name, table in (
             rf"(^|[{{,\s])'?{re.escape(offered)}'?: [\[{{]", block, re.M
         ), (name, offered)
 
+# What the eleven tools say about themselves is paid on every request, before any of it is used, so
+# their descriptions are the largest fixed cost this plugin adds to a turn. The vocabulary has to
+# stay somewhere -- a model that cannot see the words cannot pose -- so the budget is on the
+# explaining: what a tool has to say beyond its own contract, it says when it is called. AvatarPose()
+# with nothing to move answers with the place and joint table, and every tool names its allowed
+# values in the error it returns. Both numbers are what the eleven cost after that cut, rounded up.
+TOOL_PROSE_BUDGET = 4_700  # characters, all eleven descriptions together
+TOOL_PROSE_CAP = 1_400  # characters, any one of them
+
+prose = {
+    node.name: len(ast.get_docstring(node) or "")
+    for node in ast.parse(tools).body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    and node.name.startswith("Avatar")
+}
+assert len(prose) == 11, sorted(prose)  # a tool that left, or arrived, without being priced
+over = {name: size for name, size in prose.items() if size > TOOL_PROSE_CAP}
+assert not over, f"a description is over {TOOL_PROSE_CAP} characters: {over}"
+assert sum(prose.values()) <= TOOL_PROSE_BUDGET, sorted(
+    prose.items(), key=lambda pair: -pair[1]
+)[:3]
+
 # Presence without a camera: how long since the keyboard or mouse last moved. The parsers first,
 # each on the shape its command really prints, then the clock that turns a number into an answer.
 from zrb_avatar.idle import (  # noqa: E402
@@ -1853,6 +1875,25 @@ try:
     assert face_zrb.AvatarFace("smug").startswith("emotion must be one of happy")
     assert face_zrb.AvatarFace("pout", "hard").startswith("strength must be one of soft")
     assert len(sent) == 4  # neither refusal sent anything
+finally:
+    face_zrb.send = real_send
+
+# A pose, and the table it hands out. A call naming nothing used to be an error; it is now the place
+# and joint table, which is where the description's long ranges went: the words a pose needs are paid
+# by the call that poses, not by every request that might.
+sent, real_send = [], face_zrb.send
+face_zrb.send = sent.append
+try:
+    table = face_zrb.AvatarPose()
+    assert table.startswith("Nothing to move.")
+    for joint in ("wrist", "elbow", "arm", "shoulder", "spine", "leg", "knee", "ankle"):
+        assert f"{joint} " in table, joint
+    assert "0 keeps it until AvatarRest" in table
+    assert sent == []  # the table is an answer, not a pose
+    assert face_zrb.AvatarPose(left_hand="chest", seconds=0) == (
+        "Holding left_hand: chest until you let go (AvatarRest)."
+    )
+    assert sent[-1] == {"type": "pose", "hold": True, "leftHand": "chest"}
 finally:
     face_zrb.send = real_send
 

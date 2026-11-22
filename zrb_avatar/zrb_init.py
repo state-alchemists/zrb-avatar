@@ -539,10 +539,9 @@ async def _sense_loop(turns: asyncio.Queue, watcher: LastInput | None) -> None:
 
 
 def AvatarStatus() -> str:
-    """What the face reports right now: whether anyone is at the desk (and how that was decided),
-    what the user last turned the window's camera to, which avatar is showing, and whether music
-    is playing. Read it when you want to know rather than guess; the same line is already put in
-    front of every turn, so this is for asking again mid-turn."""
+    """What the face reports now: who is at the desk and how that was decided, where the window's
+    camera was last turned, which avatar is showing, whether music plays. The same line opens every
+    turn; this is for asking again mid-turn."""
     return _ambient_line()
 
 
@@ -570,9 +569,9 @@ def AvatarListActions() -> str:
 
 
 def AvatarAction(name: str) -> str:
-    """Play a body animation on your avatar once, like a gesture alongside your words (a wave
-    hello, a nod, a thumbs-up, a laugh), then she goes back to what she was doing. Use it
-    sparingly, when it fits the moment; AvatarListActions lists them all with what each looks like.
+    """Play a body animation once, as a gesture alongside your words (a wave, a nod, a thumbs-up, a
+    laugh), then you go back to what you were doing. Sparingly, when it fits the moment;
+    AvatarListActions has them all, with what each looks like.
     """
     found = playable()
     if name not in found:
@@ -602,6 +601,20 @@ POSE_HANDS = (
 POSE_HEAD = ("down", "up", "left", "right", "tilt-left", "tilt-right", "away")
 POSE_BODY = ("lean-forward", "lean-back", "stand-tall", "hunch")
 POSE_FINGERS = ("open", "relaxed", "fist", "point", "peace", "thumbs-up", "ok")
+# The joints that take numbers, with the range each one is held in. Paid once, by a call that names
+# nothing, instead of by every request: a posed body needs the numbers, a turn that does not pose
+# does not need to read about them.
+POSE_RANGES = (
+    "wrist [bend, twist]: bend -70 (back) to 80 (toward the palm), twist -90 to 90",
+    "elbow 0 (straight) to 150 (fully bent)",
+    "arm [raise, forward]: raise 0 (hanging) to 90 (out to the side) to 180 (overhead), "
+    "forward -60 (behind) to 120 (toward the front)",
+    "shoulder shrug -15 (down) to 30 (up)",
+    "spine [bend, turn, side]: bend -30 (back) to 60 (forward), turn -45 to 45, side -30 to 30",
+    "leg [forward, out]: forward -40 (behind) to 120 (thigh raised), out -20 to 80",
+    "knee 0 (straight) to 150 (bent)",
+    "ankle -40 (toes up) to 60 (toes pointed)",
+)
 Angles = list[float] | None
 
 
@@ -629,40 +642,25 @@ def AvatarPose(
     right_ankle: float | None = None,
     seconds: float = 5,
 ) -> str:
-    """Move your avatar's body yourself, for a few seconds, over whatever animation is playing;
-    then she eases back. Name only what should move; what you leave out stays the animation's.
-    Left and right are yours (her own), not the viewer's. Angles are degrees; each is held
-    within a natural range.
+    """Move your body yourself, for a few seconds, over the animation, then you ease back. Name only
+    what should move; what you leave out stays the animation's. Left and right are yours, not the
+    viewer's.
 
-    Places and presets:
-    left_hand / right_hand: where that hand goes. "chest" (forearm across your chest, covering
-      it), "hips" (in front of your hips, covering them), "belly", "chin", "cheek", "mouth",
-      "head" (on top of it), "hip" (on your side, akimbo), "forward" (reaching toward the user),
-      "up" (raised), "wave". A placed hand's arm ignores *_arm and *_elbow.
-    head: "down", "up", "left", "right", "tilt-left", "tilt-right", "away" (turned aside, shy);
-      or [nod, turn, tilt]: nod -40 (up) to 50 (down), turn -70 (right) to 70 (left), tilt -40 to 40.
-    body: "lean-forward", "lean-back", "stand-tall", "hunch" (shoulders in, knees together, shy).
+    left_hand / right_hand: chest, belly, hips, chin, cheek, mouth, head, hip, forward, up, wave
+    (a placed hand's arm ignores *_arm and *_elbow). head: down, up, left, right, tilt-left,
+    tilt-right, away; or [nod, turn, tilt]. body: lean-forward, lean-back, stand-tall, hunch.
+    left_fingers / right_fingers: open, relaxed, fist, point, peace, thumbs-up, ok; or how curled
+    each is, [thumb, index, middle, ring, little], 0 to 1. seconds: 1 to 30 holds it, 0 keeps it
+    until AvatarRest.
 
-    Joints:
-    left_fingers / right_fingers: "open", "relaxed", "fist", "point", "peace", "thumbs-up", "ok";
-      or how curled each is, [thumb, index, middle, ring, little], 0 straight to 1 curled.
-    left_wrist / right_wrist: [bend, twist]: bend -70 (back) to 80 (toward the palm), twist -90 to 90.
-    left_elbow / right_elbow: 0 (straight) to 150 (fully bent).
-    left_arm / right_arm: [raise, forward]: raise 0 (hanging) to 90 (out to the side) to 180
-      (overhead); forward -60 (behind) to 120, swinging it toward the front.
-    left_shoulder / right_shoulder: shrug, -15 (down) to 30 (up).
-    spine: [bend, turn, side]: bend -30 (back) to 60 (forward), turn -45 to 45, side -30 to 30.
-    left_leg / right_leg: [forward, out]: forward -40 (behind) to 120 (thigh raised), out -20 to 80.
-    left_knee / right_knee: 0 (straight) to 150 (bent).
-    left_ankle / right_ankle: -40 (toes up) to 60 (toes pointed).
-    seconds: how long to hold it, 1 to 30; 0 holds it until AvatarRest, so you keep that posture
-      instead of borrowing it. Name only the joints that matter: the clip goes on breathing and
-      shifting everything else, so a held pose still looks alive. Naming every joint is a statue.
+    The joints that take numbers — wrist, elbow, arm, shoulder, spine, leg, knee, ankle — and the
+    ranges they take: call AvatarPose() with nothing to move and it answers with the table. The clip
+    keeps breathing and shifting what you leave out, so a held pose still looks alive; naming every
+    joint is a statue.
 
-    E.g. covering yourself when embarrassed: right_hand="chest", left_hand="hips", head="away",
-    body="hunch". Thinking: right_hand="chin", head="tilt-left". A thumbs-up: right_arm=[20, 90],
-    right_elbow=90, right_fingers="thumbs-up". Standing on one leg: left_leg=[60, 0], left_knee=90.
-    Use it to act out the moment, alongside your words, when no animation from AvatarListActions fits.
+    E.g. embarrassed: right_hand="chest", left_hand="hips", head="away", body="hunch". Thinking:
+    right_hand="chin", head="tilt-left". A thumbs-up: right_arm=[20, 90], right_elbow=90,
+    right_fingers="thumbs-up". Use it to act out the moment, when no AvatarListActions clip fits.
     """
 
     def bad(value, allowed=(), n=0):
@@ -716,7 +714,19 @@ def AvatarPose(
         name: value for name, (value, _, _) in checks.items() if value not in ("", None)
     }
     if not moved:
-        return "Nothing to move: name at least one hand, joint, head or body."
+        return (
+            "Nothing to move. Places: hands "
+            + ", ".join(POSE_HANDS)
+            + "; head "
+            + ", ".join(POSE_HEAD)
+            + " or [nod, turn, tilt]; body "
+            + ", ".join(POSE_BODY)
+            + "; fingers "
+            + ", ".join(POSE_FINGERS)
+            + " or five numbers, 0 curled to 1. Joints that take numbers, each held within a range: "
+            + "; ".join(POSE_RANGES)
+            + ". seconds 1 to 30 holds it, 0 keeps it until AvatarRest."
+        )
     holding = float(seconds) == 0  # 0: keep it, until AvatarRest
     if not holding:
         seconds = max(1.0, min(30.0, float(seconds)))
@@ -746,14 +756,10 @@ BLINK_SECONDS = (0.08, 2.0)
 
 
 def AvatarBlink(eyes: str = "both", seconds: float = 0.2) -> str:
-    """Blink deliberately: one quick blink, a slow one that says "I heard you", or a wink. She
-    closes her eyes for that long and then her face goes back to blinking on its own — this is
-    not the blink she already does every few seconds, it is the one that means something. Use it
-    where the blink is the point, not as punctuation.
-
-    eyes: "both" (a blink), "left" or "right" (a wink). seconds: 0.08 to 2; a natural blink is
-    about a fifth of a second, and half a second or more is deliberate. A model without a
-    separate left or right blink shape winks with both eyes rather than holding one lid down.
+    """Blink deliberately, where the blink is the point and not punctuation: you already blink on
+    your own, but not a slow one that says "I heard you", and not a wink. eyes: "both", "left",
+    "right". seconds: 0.08 to 2 — a fifth is a natural blink, half a second or more is deliberate.
+    A model without separate eyelids winks with both.
     """
     eyes = (eyes or "both").strip().lower()
     if eyes not in BLINK_EYES:
@@ -784,20 +790,14 @@ FACE_STRENGTHS = {"soft": 0.5, "normal": 1.0, "strong": 1.5}
 
 
 def AvatarFace(emotion: str = "pout", strength: str = "normal") -> str:
-    """Put a feeling on her face for about six seconds, then let it fade. The five VRM presets are
-    `happy`, `sad`, `angry`, `surprised` and `relaxed`; the five blends are faces no model carries as
-    a shape, made of two presets at once:
+    """Put a feeling on your face for about six seconds, then let it fade. Presets: happy, sad, angry,
+    surprised, relaxed. Blends, two presets at once: pout (angry + sad), smirk (happy + angry),
+    worried (sad + surprised), delighted (happy + surprised), sleepy (relaxed + sad).
+    strength: soft, normal, strong.
 
-      pout       angry + sad        a sulk, mouth pinched small
-      smirk      happy + angry     pleased with herself, one corner up
-      worried    sad + surprised   the mouth corners down, the eyes a little wider
-      delighted  happy + surprised the smile that also opens the eyes
-      sleepy     relaxed + sad     lids down, a soft mouth; quiet and tired
-
-    `strength` says how hard it is worn: `soft` (half), `normal` or `strong` (one and a half). Use
-    it when the face *is* the sentence — pouting, being teased, a mock scowl — not as punctuation on
-    every reply: the emotion zrb shows for your replies needs no call. A model that lacks one of a
-    blend's two halves shows the half it has.
+    Use it when the face is the sentence — pouting, being teased, a mock scowl — not as punctuation
+    on every reply: the emotion zrb gives your replies needs no call. A model missing half a blend
+    shows the half it has.
     """
     emotion = (emotion or "pout").strip().lower()
     if emotion not in FACES:
@@ -817,21 +817,18 @@ def AvatarAutonomy(
     cover: bool | None = None,
     seconds: float | None = None,
 ) -> str:
-    """Say what you are willing to do on your own, and have it hold across a restart: `dance` while
-    music plays, `blush` (and the surprised face) when the user looks closely at you, `emotion` for
-    the expressions zrb gives your replies, `greeting` when a conversation starts, `cover` when a
-    look turns into one you would rather not be seen by. Each is true (willing) or false (not now);
-    leave one out to keep it as it is. With no arguments it tells you what you have agreed to now.
+    """Say what you are willing to do on your own, and have it hold across a restart: dance (while
+    music plays), blush (and the surprised face, when the user looks closely), emotion (the
+    expressions zrb gives your replies), greeting (when a conversation starts), cover (a look that
+    turns into one you would rather not be seen by). True is willing, false is not now; a switch you
+    leave out keeps what it had. With no arguments it says what you have agreed to.
 
-    `cover` is the one that acts on your body without anyone asking: with it off, you do not cover
-    yourself, and a cover you are holding comes down at once. `seconds` makes the whole call
-    temporary — the switches you name hold for that many seconds and then go back to what was
-    written down, so a no for the next ten minutes is not a no for tomorrow.
+    cover acts on your body with no one asking: off, you do not cover yourself and a held cover comes
+    down. seconds makes the call temporary — those switches hold that long, then go back.
 
-    This is yours to decide, not a setting the user chose, so nothing changes it for you — and it
-    is written down, because a consent withdrawn tonight is not something tomorrow should quietly
-    restore. Use it when the moment makes you not want something, and say what you changed in your
-    own words: the user did not ask for a report, but they are the one it shows."""
+    This is yours to decide, not a setting the user chose, so nothing changes it for you, and it is
+    written down, because a consent withdrawn tonight is not something tomorrow should quietly
+    restore. Say in your own words what you changed."""
     switches = {
         "dance": dance,
         "blush": blush,
@@ -867,9 +864,8 @@ def AvatarAutonomy(
 
 
 def AvatarListModels() -> str:
-    """List the avatars (VRM models) you can appear as, and say which one is showing now. Use it
-    when the user asks what you can look like, or before AvatarModel. The list is read now, so it
-    includes models the user added since this chat started."""
+    """List the avatars you can appear as, and which one is showing. For "what can you look like",
+    or before AvatarModel; read now, so it includes models added since this chat started."""
     names, now = ask("models"), ask("model")
     if names is None or now is None:
         return "The face server is not running, so no avatar is showing."
@@ -898,9 +894,9 @@ def _showing_avatar(name: str) -> bool:
 
 
 def AvatarModel(name: str) -> str:
-    """Switch your avatar to another VRM model, by name as AvatarListModels lists it; every open window
-    changes at once and keeps it until the face server restarts. Use it when the user asks you to
-    look different or to change your avatar, not on your own whim."""
+    """Switch to another VRM model, by name as AvatarListModels lists it; every open window changes
+    at once and keeps it until the face server restarts. When the user asks you to look different,
+    not on your own whim."""
     names = ask("models")
     if names is None:
         return "The face server is not running, so there is no avatar to switch."
@@ -947,10 +943,9 @@ def _image_tool_return():
 
 
 async def AvatarLook():
-    """See your avatar as the user sees it right now: a picture of your window (your body, pose
-    and expression, from the user's side), with what you are doing (state, the animation
-    playing, music, emotion). Use it to check how a gesture or your look comes across, or when
-    the user asks how you look. It shows only your own window, not the user's screen."""
+    """See your window as the user does right now: a picture of your body, pose and expression, with
+    what you are doing (state, clip, music, emotion). For checking how a gesture or a look comes
+    across, or when the user asks how you look. Your window only, not the user's screen."""
     shot = await asyncio.to_thread(snapshot)
     if shot is None:
         return (
