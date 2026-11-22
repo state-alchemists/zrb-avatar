@@ -113,7 +113,10 @@ without restarting zrb.
 | `AvatarStatus` | What the face last reported: whether anyone is at the desk and how that was decided, the camera, the avatar, the music. For asking again mid-turn. |
 
 **What `AvatarPose` takes.** Name only the joints that matter — the clip goes on breathing the rest,
-and naming every joint gives a statue, not a person.
+and naming every joint gives a statue, not a person. A call that names nothing poses nothing and
+answers with this table instead: every place, every joint the numbers go on, and the range each one
+is held in. The tool's own description carries only what a call needs to be made, because that
+description is read before every request; the ranges are paid by the call that poses.
 
 - **Each hand to a place** (placed by IK, so it fits any model): `chest`, `hips`, `belly`, `chin`,
   `cheek`, `mouth`, `head`, `hip`, `forward`, `up`, `wave`. A placed hand's arm ignores `*_arm` and
