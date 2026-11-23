@@ -1593,6 +1593,16 @@ assert "canvasEl.addEventListener('pointerdown'" in page, "nothing starts a drag
 assert "onPointerMove" in page and "onPointerMove" in framing, "a drag moves nothing"
 assert "view.yaw += (e.clientX - was.x)" in framing, "a drag across her does not turn her"
 assert "view.zoom *= now / apart" in framing, "a pinch resizes nothing"
+# In the app that press is the window's, not the camera's: she is dragged by her body, and the app
+# moves the window a frame behind the cursor, so the camera taking the same press turned her as she
+# slid -- and at the screen's edge, where the window stopped and the cursor did not, all the way with
+# the cursor. The desktop bridge answers whether a press is its own, and the page asks before the
+# framing hears it.
+desktop = (server.HERE / "js" / "desktop.js").read_text()
+assert "const takes = e => over && e.button === 0;" in desktop, (
+    "the app's drag no longer says which presses are its own"
+)
+assert "if (desktop.takes(e)) return;" in page, "a press that moves her window also turns her"
 # A drag that is still going has to push the settle back, as holding a key does: zrb is told the view
 # once it settles, and a notice sent only at the start would hand it the angle the finger passed through.
 assert "if (her.framing.onPointerMove(e)) her.view.notice();" in page, (

@@ -4,15 +4,21 @@
 // A drag only says when it starts and ends: the app moves the window with the cursor itself, as
 // the page's own screen coordinates lag behind a window that is moving.
 export function createDesktop(renderer, app) {
-  if (!app?.hover) return { drawn() {} };
+  if (!app?.hover) return { drawn() {}, takes: () => false };
   const canvas = renderer.domElement, gl = renderer.getContext(), pixel = new Uint8Array(4);
   let probe = null, over = false, drag = false;
   const hover = now => { if (now !== over) app.hover(over = now); };
+  // A press on her is the window's in the app: it moves her. js/main.js asks this before it hands the
+  // same press to the camera, which took it as a finger and orbited her while the window slid — she
+  // drifted as the window caught up a frame late, and at the screen's edge she turned with the cursor.
+  // It answers for the whole press, not only its first event, so the answer does not depend on which
+  // listener happens to run first.
+  const takes = e => over && e.button === 0;
 
   addEventListener('pointermove', e => { if (!drag) probe = [e.clientX, e.clientY]; });
   document.addEventListener('pointerleave', () => { if (!drag) hover(false); });
   canvas.addEventListener('pointerdown', e => {
-    if (!over || e.button !== 0) return;
+    if (!takes(e) || drag) return;
     drag = true;
     app.drag(true);
     canvas.setPointerCapture(e.pointerId); // hears the release even off the window
@@ -22,6 +28,7 @@ export function createDesktop(renderer, app) {
   canvas.addEventListener('lostpointercapture', drop);
 
   return {
+    takes,
     // After each render: is she under the cursor?
     drawn() {
       if (!probe) return;
