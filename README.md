@@ -418,7 +418,7 @@ do not commit or share them.
 | Shift+↑ / Shift+↓ | Move the camera's focus up or down her body (to her face, say). |
 | `+` / `-` | Zoom in or out (0.5× to 8×). |
 | `0` | Reset the camera. |
-| *drag* | One finger (or the mouse) on her orbits, the same steps as the arrow keys; two fingers pinch her bigger or smaller. The canvas refuses the browser's own scroll and zoom, so the page cannot move under the drag. |
+| *drag* | One finger on her orbits, the same steps as the arrow keys; two fingers pinch her bigger or smaller. In a browser the mouse does the same; in the window a mouse press on her moves the window instead, so dragging never turns her. The canvas refuses the browser's own scroll and zoom, so the page cannot move under the drag. |
 
 ### Sizing
 

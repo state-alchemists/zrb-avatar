@@ -493,7 +493,13 @@ addEventListener('wheel', e => { e.preventDefault(); her.framing.onWheel(e); her
 // the view once it settles, so a drag that is still going must push that moment back rather than let it
 // pass at the angle the finger happened to be at a second and a half in.
 const canvasEl = renderer.domElement;
-canvasEl.addEventListener('pointerdown', e => { her.framing.onPointerDown(e); her.view.notice(); });
+// In the app a press on her is the window's: it moves her (desktop.js). The camera must not take the
+// same press as a finger — both did, so dragging her across the screen orbited her as well, and at the
+// screen's edge turned her with the cursor.
+canvasEl.addEventListener('pointerdown', e => {
+  if (desktop.takes(e)) return;
+  her.framing.onPointerDown(e); her.view.notice();
+});
 addEventListener('pointermove', e => { // on the window: a finger that slides off her keeps the drag
   if (her.framing.onPointerMove(e)) her.view.notice();
 });
