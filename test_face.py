@@ -1755,6 +1755,18 @@ assert "function paintButtons()" in page and "onState: now => {" in page, (
 assert "zrb can't hear you" in page and "zrb isn't listening" in page, (
     "a disabled button says nothing about why it is disabled"
 )
+# And nothing keeps running behind a button that can no longer be pressed: zrb moving its voice away
+# closes the speaker, the microphone and the camera this page had open, or the page would hold them
+# until it was reloaded with no way to switch them off (the review of #35, 2026-11-28).
+assert "if (!reach.remote && audio.hearing) audio.stopEars();" in page, (
+    "a speaker zrb no longer speaks through stays open behind a disabled button"
+)
+assert "if (!reach.listening && audio.listening) audio.stopMic();" in page, (
+    "a microphone zrb has stopped reading stays open behind a disabled button"
+)
+assert "if (!reach.remote && pageCamera.names.length) pageCamera.release();" in page, (
+    "a camera grant zrb can no longer ask for is left with no way to take it back"
+)
 assert "button:disabled" in page_html, "a disabled button does not look disabled"
 # And what zrb says is asked again every second rather than once at load: `/set LLM_VOICE_REMOTE_URL`
 # moves zrb's voice onto (or off) this server while the chat runs, and the page follows in the same

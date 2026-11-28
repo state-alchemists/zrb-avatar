@@ -861,6 +861,13 @@ function onEvent({ data }) {
     // button is the only thing that says whether a press would be heard, and a page whose zrb just
     // went away should stop offering one.
     reach = { remote: !!msg.remote, listening: !!msg.listening };
+    // And nothing is left running behind a button that can no longer be pressed: a speaker or a
+    // microphone zrb has moved away from would otherwise stay open until the page was reloaded, and
+    // the row it left behind offers no way to close it. The camera goes the same way, because a grant
+    // zrb can no longer ask for is a permission this page has no button to take back.
+    if (!reach.remote && audio.hearing) audio.stopEars();
+    if (!reach.listening && audio.listening) audio.stopMic();
+    if (!reach.remote && pageCamera.names.length) pageCamera.release();
     paintButtons();
   } else if (msg.type === 'emotion' && msg.source !== 'user' && autonomy.emotion) {
     // Hers only: she answers the user's tone in her reply, which carries its own emotion.
