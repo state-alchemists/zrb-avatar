@@ -1531,11 +1531,18 @@ assert "dispatchEvent(new Event('resize'))" in page_html, (
 )
 # The app and the page are the same in this now: her canvas is the whole window either way. It used to
 # be the window less the stack on a phone, which meant a hint that wrapped changed her size and the
-# keyboard changed it by a third while a line was typed. What is remembered instead is the tallest
-# window seen at this width (see above), so no keyboard can make her smaller.
-assert 'classList.contains(\'app\')' not in re.search(
+# keyboard changed it by a third while a line was typed. A page remembers the tallest window seen at this
+# width (see above), so no keyboard can make her smaller.
+#
+# The app does not: its window is sized by the framing, both ways, and a remembered height would leave the
+# canvas taller than a window that has just been made shorter -- she would be drawn cropped, with the row
+# placed against stale coordinates. The review of PR #34 found exactly that on 2026-11-28.
+assert "classList.contains('app')) return Math.max(120, innerHeight)" in re.search(
     r"function freeHeight\(\) \{.*?\n\}", page, re.S).group(0), (
-    "one of the two is still drawn into a smaller canvas than the other"
+    "a window the framing has just made shorter still draws a canvas of the old height"
+)
+assert "tallHeight" in page and "innerHeight > tallHeight" in page, (
+    "a page's canvas follows the phone's keyboard again, so a line typed on it makes her smaller"
 )
 assert "getBoundingClientRect().top" not in re.search(
     r"function freeHeight\(\) \{.*?\n\}", page, re.S).group(0), (
@@ -1695,8 +1702,8 @@ assert re.search(r"html\.app #controls\s*\{[^}]*align-items:\s*center", page_htm
 assert re.search(r"html\.app #subtitle\.status\s*\{[^}]*display:\s*none", page_html), (
     "the window says the state twice, under her and beside her feet"
 )
-assert "const hold = () => {" in page and "if (audio.listening) audio.stopMic();" in page, (
-    "the talk button does not hold the microphone open and close it again"
+assert "const hold = () => {" in page and "holding = true;" in page and "audio.startMic();" in page, (
+    "the talk button does not hold the microphone open"
 )
 assert "talkButton.addEventListener('pointerup', letGo)" in page, (
     "letting go of the talk button is not what stops the microphone"
@@ -1707,6 +1714,9 @@ assert "if (!audio.hearing) audio.startEars();" not in page, (
 assert "audio.hearing ? audio.stopEars() : audio.startEars()" in page, (
     "her voice has no button of its own, so only the microphone's press can bring it back"
 )
+assert "owned = !audio.listening;" in page and "if (owned) audio.stopMic();" in page, (
+    "releasing the talk button while the browser is still asking leaves the microphone open behind it"
+)
 # The camera is a switch too: a grant that can only be given is a page zrb keeps asking for photos
 # after the hand that allowed it has changed its mind. Go pressed the camera button and found no way
 # back on 2026-11-28.
@@ -1716,6 +1726,16 @@ assert "pageCamera.names.length ? pageCamera.release() : pageCamera.ask()" in pa
 camera = (server.HERE / "js" / "camera.js").read_text()
 assert "async function release()" in camera and "devices: []" in camera, (
     "there is no way to tell the server this page is no longer a camera"
+)
+# And the button's "on" is a camera zrb can really ask for, not a count of cameras the page is not allowed
+# to name: a button reading "camera on" over an ungranted camera spends its first press taking back what it
+# never gave, and the press that should have asked for permission is gone. The review of PR #34 found that
+# on 2026-11-28.
+assert "names = found.filter(device => device.label).map(device => device.label);" in camera, (
+    "the camera button is on because a camera exists, not because the page may use one"
+)
+assert "names.length ? await shoot(device) : { refusal: 'this page has its camera off' }" in camera, (
+    "a photo asked for before the camera was switched off is still taken after it"
 )
 # And each button carries an icon beside its word, so the row is read before it is read.
 assert page_html.count('class="icon"') == 3 and "#controls .icon" in page_html, (

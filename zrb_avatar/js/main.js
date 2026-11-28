@@ -127,6 +127,11 @@ function resize() {
 // the width, and that starts the measurement again.
 let tallWidth = 0, tallHeight = 0;
 function freeHeight() {
+  // The window is sized by the framing, both ways: it grows to fit her and shrinks again when the view
+  // asks for less. A remembered height there would keep the canvas taller than the window after a shrink
+  // and draw her cropped, with the row placed against stale coordinates -- so only a page, where a
+  // keyboard is the thing that changes the height, remembers the tallest.
+  if (document.documentElement.classList.contains('app')) return Math.max(120, innerHeight);
   if (innerWidth !== tallWidth) {
     tallWidth = innerWidth;
     tallHeight = innerHeight;
@@ -495,17 +500,23 @@ addEventListener('pagehide', () => audio.stop());
 // go closes the microphone, so zrb hears only what was said on purpose. Her voice is the button beside
 // it, not this one: a mute that the microphone quietly undid would be no mute at all.
 if (talkButton) {
-  // Whether the microphone that is open belongs to this press: `m` may have opened one that outlives
-  // it, and a window that lost the cursor mid-hold must not close a microphone nobody let go of.
-  let holding = false;
+  // Whether the microphone that is open belongs to this press: `m` or the voice button may have opened
+  // one that outlives it, and a window that lost the cursor mid-hold must not close a microphone nobody
+  // let go of. So a press records whether it opened one, and only that press closes it.
+  let holding = false, owned = false;
   const hold = () => {
     holding = true;
+    owned = !audio.listening;
     audio.startMic();
   };
   const letGo = () => {
     if (!holding) return;
     holding = false;
-    if (audio.listening) audio.stopMic();
+    // `stopMic` cancels a start that is still on its way as well as one that is running: releasing the
+    // button while the browser is still asking for the microphone used to leave that start to finish,
+    // and the microphone stayed open with the button up. The press owns the start, so it ends it.
+    if (owned) audio.stopMic();
+    owned = false;
   };
   talkButton.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;

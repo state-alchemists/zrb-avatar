@@ -23,11 +23,6 @@ export function createCamera({ onState, page = '' } = {}) {
 
   const changed = () => onState?.({ names, error });
 
-  // A camera without a label is still a camera: the page has not been allowed one, so the browser
-  // is keeping the names to itself, and "camera 2" is a name zrb can be given to ask for the same
-  // one again -- by position, which is all that is known.
-  const nameOf = (device, i) => device.label || `camera ${i + 1}`;
-
   function videoInputs() {
     if (!navigator.mediaDevices?.enumerateDevices) return Promise.resolve([]);
     return navigator.mediaDevices
@@ -72,19 +67,18 @@ export function createCamera({ onState, page = '' } = {}) {
   // asks a photo of the page that named the camera rather than of every page in the room.
   async function publish() {
     const found = await videoInputs();
-    names = found.map(nameOf);
+    // A page not allowed a camera knows only how many it has: "camera 2" is a position rather than a name,
+    // so it is neither offered to zrb nor worn by the camera button. A button reading "camera on" over a
+    // camera nobody granted spends its first press taking back a name that was never given, and the press
+    // that should have asked for the camera is gone. An empty report is still a report -- the server drops
+    // a page's names when one is handed to it -- which is how a camera whose permission was taken away
+    // stops being offered.
+    names = found.filter(device => device.label).map(device => device.label);
     changed();
-    // A page not allowed a camera knows only how many it has: "camera 2" is a position rather
-    // than a name, so it is not reported and zrb is never handed one to ask for. An empty report
-    // is still a report -- the server drops a page's names when one is handed to it -- and that
-    // is how a camera whose permission was taken away stops being offered. Returning early here
-    // would leave the old names standing, and zrb would keep asking a page that can no longer
-    // answer.
-    const report = found.some(device => device.label) ? names : [];
     try {
       await fetch(`frame/devices?page=${encodeURIComponent(page)}`, {
         method: 'POST',
-        body: JSON.stringify({ devices: report }),
+        body: JSON.stringify({ devices: names }),
       });
     } catch {
       // The server is going away; the names are published again on the next grant or photo.
@@ -150,7 +144,10 @@ export function createCamera({ onState, page = '' } = {}) {
   // The answer to one ask from zrb, by the id it asked with. A photo also means the browser has now
   // labelled this page's cameras, so they are published: the next ask can name the one just used.
   async function answer(id, device) {
-    const result = await shoot(device);
+    // A press taken back between the ask and the photo is a photo not taken: the camera is off by the time
+    // this runs, and opening one for a request that arrived while it was on is the one way "off" would not
+    // mean off. The refusal is answered rather than dropped, so the ask ends with words instead of nothing.
+    const result = names.length ? await shoot(device) : { refusal: 'this page has its camera off' };
     try {
       await fetch(`frame?id=${encodeURIComponent(id)}`, {
         method: 'POST',
