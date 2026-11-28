@@ -1511,8 +1511,8 @@ assert re.search(r"#subtitle\s*\{[^}]*bottom:\s*calc\(var\(--bottom-h", page_htm
 assert "function freeHeight()" in page and "renderer.setSize(innerWidth, freeHeight())" in page, (
     "the canvas is not the window, so the box pushes her feet up out of the way"
 )
-assert "tallHeight" in page and "innerHeight > tallHeight" in page, (
-    "the canvas follows the keyboard, so she shrinks while a line is typed on a phone"
+assert "tallHeight" not in page and "tallWidth" not in page, (
+    "the canvas keeps a height the window no longer has, and no resize can be told from the keyboard's"
 )
 assert "html:not(.app) #bottom" in page_html and "linear-gradient(transparent" in page_html, (
     "the foot of the page floats over her boots with nothing to read it against"
@@ -1529,31 +1529,11 @@ assert "innerHeight * (innerHeight > innerWidth" not in (server.HERE / "js" / "f
 assert "dispatchEvent(new Event('resize'))" in page_html, (
     "a stack of a different height never tells the canvas it changed"
 )
-# The app and the page are the same in this now: her canvas is the whole window either way. It used to
-# be the window less the stack on a phone, which meant a hint that wrapped changed her size and the
-# keyboard changed it by a third while a line was typed. A page remembers the tallest window seen at this
-# width while a field has the focus (see above), so no keyboard can make her smaller.
-#
-# The app does not: its window is sized by the framing, both ways, and a remembered height would leave the
-# canvas taller than a window that has just been made shorter -- she would be drawn cropped, with the row
-# placed against stale coordinates. The review of PR #34 found exactly that on 2026-11-28.
-assert "classList.contains('app')) return Math.max(120, innerHeight)" in re.search(
-    r"function freeHeight\(\) \{.*?\n\}", page, re.S).group(0), (
-    "a window the framing has just made shorter still draws a canvas of the old height"
-)
-# And neither does a page when nothing is being typed into: the memory is there for the keyboard, and
-# keeping it across a plain window resize drew her below the bottom of a browser window made shorter,
-# which the same review found the same day.
-assert re.search(
-    r"function freeHeight\(\) \{.*?if \(!typing\(\)\) \{.*?return Math.max\(120, tallHeight\);.*?\n\}",
-    page, re.S), (
-    "a page keeps the remembered height after the window itself is made shorter"
-)
-assert "['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)" in page, (
-    "the remembered height is kept for a resize that had no keyboard behind it"
-)
-assert "tallHeight" in page and "innerHeight > tallHeight" in page, (
-    "a page's canvas follows the phone's keyboard again, so a line typed on it makes her smaller"
+# The app and the page are the same in this, and the height is the window's on both: nothing is remembered,
+# so no resize has to be told from a keyboard's -- and none of them can be, which is what the review of PR
+# #34 found twice on 2026-11-28.
+assert re.search(r"function freeHeight\(\) \{\n  return Math\.max\(120, innerHeight\);\n\}", page), (
+    "the canvas still keeps a height of its own instead of following the window"
 )
 assert "getBoundingClientRect().top" not in re.search(
     r"function freeHeight\(\) \{.*?\n\}", page, re.S).group(0), (
