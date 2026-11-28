@@ -57,6 +57,55 @@
     #keys textarea { padding: 8px 12px; font-size: 14px; }
   }
   html.app #keys { display: none; }
+  /* The conversation, asked for rather than always there. Closed, only a pill is on screen, so the model's
+     face is clear; opening it grows this stack upward -- the same height the page measures into --bottom-h
+     -- and the caption climbs with it. Read-only: the box below is the only way in, so there is no second
+     door to keep in sync. js/history.js paints it; the server remembers what was said. The window has no
+     conversation of its own (it is the model's body), so it is hidden there. */
+  #history { display: flex; flex-direction: column; gap: 6px; align-items: center; min-height: 0; }
+  html.app #history { display: none; }
+  #history-handle, #history-new {
+    pointer-events: auto; cursor: pointer; font: 11px/1 monospace; color: #9fd8f5;
+    background: rgba(10, 10, 16, .6); border: 1px solid rgba(60, 200, 255, .3);
+    border-radius: 999px; padding: 4px 12px;
+  }
+  #history-handle:hover, #history-new:hover { color: var(--glow); border-color: var(--glow); }
+  #history-log {
+    pointer-events: auto; display: none; box-sizing: border-box; width: 100%;
+    overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+    max-height: 60vh; max-height: 60dvh; /* dvh, so a phone's keyboard takes height rather than hides it */
+    background: rgba(10, 10, 16, .84); border: 1px solid rgba(60, 200, 255, .18);
+    border-radius: 14px; padding: 10px 12px;
+    color: #e8f4ff; font: 13px/1.55 -apple-system, system-ui, sans-serif;
+  }
+  #history.open #history-log { display: block; }
+  /* What markdown brings with it. Code never wraps -- a wrapped command reads as two commands -- and a
+     table or a wide diagram scrolls sideways rather than reshaping the sheet. */
+  #history-log > *:first-child { margin-top: 0; }
+  #history-log > *:last-child { margin-bottom: 0; }
+  #history-log p, #history-log ul, #history-log ol, #history-log pre, #history-log table { margin: 0 0 9px; }
+  #history-log ul, #history-log ol { padding-left: 20px; }
+  #history-log h1, #history-log h2, #history-log h3 { font-size: 14px; margin: 0 0 6px; }
+  #history-log pre {
+    background: rgba(0, 0, 0, .55); border-radius: 8px; padding: 8px 10px; overflow-x: auto;
+    font: 12px/1.45 monospace; color: #cfe9ff;
+  }
+  #history-log code { font: 12px/1.45 monospace; color: #bfe6ff; }
+  #history-log pre code { color: inherit; }
+  #history-log blockquote { margin: 0 0 9px; padding-left: 10px; border-left: 2px solid rgba(60, 200, 255, .4); color: #b9cee0; }
+  #history-log table { border-collapse: collapse; display: block; overflow-x: auto; }
+  #history-log th, #history-log td { border: 1px solid rgba(60, 200, 255, .25); padding: 3px 7px; text-align: left; }
+  #history-log a { color: var(--glow); }
+  #history-log img { max-width: 100%; border-radius: 8px; }
+  /* A turn: hers is the page's own voice, so it reads as a letter; the user's is quoted back, tinted and
+     set to the right, because the same words in the same shape would make a dialogue look like a list. */
+  #history-log .turn { margin: 0 0 12px; }
+  #history-log .turn.you { text-align: right; }
+  #history-log .turn.you > .words {
+    display: inline-block; text-align: left; max-width: 85%; white-space: pre-wrap;
+    background: rgba(60, 200, 255, .12); border: 1px solid rgba(60, 200, 255, .28);
+    border-radius: 12px; padding: 6px 10px;
+  }
   /* The foot of the window: the app hides the manual, so the row carries the three things a hand needs
      without it -- what she is doing, the microphone, and the camera -- and they stay in sight rather
      than waiting to be asked for. A page says those two on its status line and in its own keys, and
@@ -151,6 +200,14 @@
 <div id="subtitle"></div>
 <div id="bottom">
   <div id="status">loading…</div>
+  <!-- The conversation, on the page it is read on: a pill while it is closed, a sheet while it is open.
+       `aria-live` so a screen reader reads a new turn as it lands; the sheet itself is never scrolled
+       under a finger that is reading (js/history.js decides). -->
+  <section id="history" aria-label="the conversation so far">
+    <button type="button" id="history-handle" aria-expanded="false" aria-controls="history-log" hidden></button>
+    <div id="history-log" role="log" aria-live="polite"></div>
+    <button type="button" id="history-new" hidden>↓ newer</button>
+  </section>
   <!-- The typing box, on the page it works on: a phone's keyboard is how a line reaches zrb with no
        terminal in reach. There is no hint naming keys here any more — the row of buttons below is the
        manual, and a page nobody can press is not fixed by telling it what to press. -->
@@ -187,6 +244,11 @@
   if (window.ResizeObserver) new ResizeObserver(measureBottom).observe(bottom);
   measureBottom();
 </script>
+<!-- Markdown, from the pair zrb's own page uses, so the words read here the way they read there. Vendored
+     and served from this server: the page has no dependency on zrb being installed, and a phone on the
+     tailnet never reaches out to a CDN. A fence with `mermaid` in it is shown as code rather than drawn. -->
+<script src="js/purify.js"></script>
+<script src="js/marked.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

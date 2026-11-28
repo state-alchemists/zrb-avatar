@@ -302,3 +302,22 @@ def face_hooks(hooks) -> None:
             return HookResult()
 
         hooks.add_hook(unless_nested(feel), events=[emotion])
+
+    # The page's history: the words the user sent and the reply she gave. A page showed only what she was
+    # doing -- a state and a caption -- so a phone that was not at the keyboard during a turn had no way to
+    # read it afterwards. `last_assistant_message` is what zrb's own speech reads when a turn ends, so the
+    # page shows the words the voice said rather than a second rendering of them. A page that connects
+    # later reads the list back off the server (`_replay`), so nothing here reads zrb's history files.
+    async def add_turn(role: str, text: "str | None") -> HookResult:
+        if text and text.strip():  # a turn with no words says nothing to a page
+            await asyncio.to_thread(send, {"type": "message", "role": role, "text": text})
+        return HookResult()
+
+    async def user_turn(context):
+        return await add_turn("user", context.prompt)
+
+    async def reply_turn(context):
+        return await add_turn("assistant", context.last_assistant_message)
+
+    hooks.add_hook(unless_nested(user_turn), events=[HookEvent.USER_PROMPT_SUBMIT])
+    hooks.add_hook(unless_nested(reply_turn), events=[HookEvent.STOP])
