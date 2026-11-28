@@ -1735,6 +1735,85 @@ assert "owned = !audio.listening;" in page and "if (owned) audio.stopMic();" in 
 assert "pageCamera.names.length ? pageCamera.release() : pageCamera.ask()" in page, (
     "the camera button asks and never takes the names back"
 )
+# Whether a press would be heard is not something a page can guess, so zrb says it: its voice reaches
+# the page as an event (`voice`), whose `listening` is the server's own knowledge of a reader on the
+# microphone route. The talk button offers a press only while one would be heard, and the two switches
+# beside it only while zrb's voice is this server's — a button that is always there is a button that
+# looks broken when hands-free is off (Go, 2026-11-28).
+assert "msg.type === 'voice'" in page and (
+    "remote: !!msg.remote,\n      listening: !!msg.listening,\n      name: typeof msg.name === 'string' ? msg.name : ''," in page
+), "the page never learns whether zrb can hear it, or what zrb calls itself"
+assert "talkButton.disabled = !reach.listening;" in page, (
+    "the talk button offers a press that nothing is reading the microphone for"
+)
+assert "voiceButton.disabled = !reach.remote;" in page and "lensButton.disabled = !reach.remote;" in page, (
+    "a switch zrb cannot reach is offered as though it did something"
+)
+assert "function paintButtons()" in page and "onState: now => {" in page, (
+    "the row is painted from more than one place, so one switch undoes what another said"
+)
+assert "${who} can't hear you" in page and "${who} isn't listening" in page, (
+    "a disabled button says nothing about why it is disabled"
+)
+# And it says her name rather than the bare word "zrb": zrb sends what it calls itself with the same
+# event, because the row is the one place on the page that writes about her (Go, 2026-11-28).
+assert "const who = reach.name || 'zrb';" in page, (
+    "the row says 'zrb' where zrb has said its own name"
+)
+# And nothing keeps running behind a button that can no longer be pressed: zrb moving its voice away
+# closes the speaker, the microphone and the camera this page had open, or the page would hold them
+# until it was reloaded with no way to switch them off (the review of #35, 2026-11-28).
+assert "if (!reach.remote && audio.hearing) audio.stopEars();" in page, (
+    "a speaker zrb no longer speaks through stays open behind a disabled button"
+)
+assert "if (!reach.listening && audio.listening) audio.stopMic();" in page, (
+    "a microphone zrb has stopped reading stays open behind a disabled button"
+)
+assert "if (!reach.remote && pageCamera.names.length) pageCamera.release();" in page, (
+    "a camera grant zrb can no longer ask for is left with no way to take it back"
+)
+# The `m` key opens the microphone and the speaker as one gesture, so it follows the same rule the
+# buttons do -- while still working as an off, which must not need zrb's permission (the review of
+# #35, 2026-11-28).
+assert "if (audio.listening || audio.hearing) return audio.stop();" in page, (
+    "the m key cannot close what it opened once zrb has gone"
+)
+assert "if (!reach.remote || !reach.listening) return;" in page, (
+    "the m key opens a microphone and a speaker nothing on the other end will use"
+)
+assert "button:disabled" in page_html, "a disabled button does not look disabled"
+# And what zrb says is asked again every second rather than once at load: `/set LLM_VOICE_REMOTE_URL`
+# moves zrb's voice onto (or off) this server while the chat runs, and the page follows in the same
+# breath instead of waiting for a restart.
+tools = (server.HERE / "zrb_init.py").read_text()
+assert "def voice_is_here() -> bool:" in tools and "get_remote_url()" in tools, (
+    "the plugin never asks where zrb's voice is, so a page cannot be told"
+)
+assert "zrb.llm.util.face_server import get_remote_url" in tools, (
+    "an older zrb's layout is read as 'no remote voice', so the page turns its own switches off"
+)
+assert '"remote": voice_is_here(),' in tools and (
+    '"name": str(CFG.LLM_ASSISTANT_NAME or ""),' in tools
+), "the plugin never tells the page that zrb's voice moved, or what zrb calls itself"
+assert "said_voice" not in tools and '"remote": voice_is_here(),' in tools, (
+    "the voice is said once, so a send that failed -- the server restarting -- never reaches a page"
+)
+server_py = (server.HERE / "server.py").read_text()
+assert "def voice_state() -> dict:" in server_py and 'event.get("type") == "voice"' in server_py, (
+    "the server neither holds what zrb said nor takes its word for it"
+)
+assert '"name": str(_voice["name"]),' in server_py and (
+    '_voice["name"] = name.strip() if isinstance(name, str) else ""'
+) in server_py, "the name zrb sent never reaches a page"
+assert 'or voice["name"]' in server_py, (
+    "a page that connects after zrb named itself is not told the name"
+)
+assert "audio.is_microphone_being_read()" in server_py and (
+    "audio.end_reading(\"in\")" in server_py
+), "the server never notices zrb arriving on the microphone route or leaving it"
+assert "with _lock:\n        said = voice_state()" in server_py, (
+    "what is sent is read before the lock that sends it, so a reader's end can land after its replacement's start"
+)
 camera = (server.HERE / "js" / "camera.js").read_text()
 assert "async function release()" in camera and "await report([])" in camera, (
     "there is no way to tell the server this page is no longer a camera"
@@ -2696,6 +2775,68 @@ def post_audio(path: str, body, headers: dict, chunked: bool = False) -> int:
     response.read()
     connection.close()
     return response.status
+
+
+# Whether zrb can hear this page is a fact this server knows by itself: a reader on the microphone
+# route is the whole of "listening" (see `_relay_audio_to_zrb`). So a page can be told without a word
+# from zrb, and told the moment it changes, which is what lets the talk button offer a press only
+# while one would be heard. With hands-free off zrb's dictation holds no reader, and a press on the
+# page's microphone went into a queue nobody drained — Go asked on 2026-11-28 why the button did
+# nothing there. Nothing has read the route yet at this point, so the count starts at zero.
+voice_ping = server.audio.PING_SECONDS
+server.audio.PING_SECONDS = 0.05  # a route that ended is noticed inside this test
+try:
+    assert server.audio.is_microphone_being_read() is False, "something is already reading"
+
+
+    def voice_event(events) -> dict:
+        while (event := next_event(events))["type"] != "voice":
+            pass  # what a connecting page is replayed first: the music, the model, the pose
+        return event
+
+
+    watcher = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    watcher.request("GET", "/events")
+    watched_voice = watcher.getresponse()
+    time.sleep(0.2)
+    assert post_event('{"type":"voice","remote":true,"name":"Tara"}') == 204, (
+        "zrb cannot say where its voice is"
+    )
+    assert voice_event(watched_voice) == {
+        "type": "voice",
+        "remote": True,
+        "listening": False,
+        "name": "Tara",
+    }, "a page is not told that zrb's voice has moved onto this server, or what it is called"
+    reader = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    reader.request("GET", "/audio/in")
+    held = reader.getresponse()  # held: a response nobody keeps is a socket that closes
+    time.sleep(0.2)
+    assert voice_event(watched_voice)["listening"] is True, (
+        "a page is not told that zrb started reading its microphone, so its button stays off"
+    )
+    # A replaced reader ends after the one that replaced it: its end must not say nobody is reading.
+    second = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    second.request("GET", "/audio/in")
+    replaced = second.getresponse()
+    time.sleep(0.2)
+    reader.close()
+    time.sleep(0.2)
+    assert server.audio.is_microphone_being_read() is True, (
+        "the reader that was replaced took the count of the one reading with it"
+    )
+    second.close()
+    del replaced
+    time.sleep(0.2)
+    assert voice_event(watched_voice)["listening"] is False, (
+        "a page is not told that zrb stopped reading, so it offers a press nothing hears"
+    )
+    # Back to what the rest of this file assumes: a page connecting now is replayed nothing about zrb.
+    assert post_event('{"type":"voice","remote":false}') == 204
+    assert voice_event(watched_voice)["remote"] is False
+    watcher.close()
+finally:
+    server.audio.PING_SECONDS = voice_ping
 
 
 def listen_once(path: str, size: int, send) -> tuple[dict, bytes]:

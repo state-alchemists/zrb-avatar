@@ -310,31 +310,66 @@ const lensButton = document.getElementById('lens'); // the camera, for a hand wi
 const lensLabel = document.getElementById('lens-label');
 const stateLabel = document.getElementById('state'); // what she is doing, in the window's own row
 const controlsRow = document.getElementById('controls'); // that row, placed beside her feet
+// What zrb can do with this page, as zrb says so itself (the `voice` event, and the replay a page gets
+// when it connects): `remote` — its voice is this server's, so this page is its microphone and its
+// speaker; `listening` — it is reading the microphone right now, so a press would be heard; `name` —
+// what zrb calls itself, for the one row on the page that writes about her instead of hearing from
+// her. `remote` and `listening` are false until zrb says otherwise, because a page with no zrb behind
+// it should say so rather than offer three buttons that do nothing; `name` is empty until then, and
+// the row falls back to zrb's own word for what is running. Nothing here may be decided from a URL:
+// `/set` moves zrb's voice while the chat runs, and a page that read a setting once would keep the
+// answer it first saw. The name is part of the same event because `LLM_ASSISTANT_NAME` is under
+// `/set` as well.
+let reach = { remote: false, listening: false, name: '' };
+// What this page's own audio last said (see `onState`), read by `paintButtons`, which is the one place
+// the buttons are painted: a refusal, zrb's reach and a camera's grant all change that row, and each
+// of them must not undo what another said.
+let ownAudio = { mic: false, ears: false, error: '' };
 const audio = createAudio({
   // Said on the status line, where a model that will not load says its piece: a microphone the
-  // browser refused has to look like a refusal, not like a switch that does nothing. And the key in
-  // the hint changes with it — `m talk and listen`, then `m stop` — because a press that leaves
-  // nothing looking different is a page that seems not to have heard the press.
-  onState: ({ mic, ears, error }) => {
-    setStatusLine(error || state, !!error);
-    // A refusal names the direction it came from, and only that button wears it: a microphone the
-    // browser refused must not read as a refused speaker, or the other way round.
-    const micError = error?.startsWith('microphone') ? error : '';
-    const earsError = error?.startsWith('speaker') ? error : '';
-    // And each button says what its own press did: a press that leaves nothing looking different is a
-    // page that seems not to have heard the press.
-    if (talkButton) {
-      talkButton.classList.toggle('on', !!mic);
-      talkLabel.textContent = micError ? 'refused' : mic ? 'listening…' : 'hold to talk';
-    }
-    if (voiceButton) {
-      voiceButton.classList.toggle('on', !!ears);
-      voiceIcon.textContent = ears ? '🔊' : '🔇'; // the icon says it before the word does
-      voiceLabel.textContent = earsError ? 'refused' : ears ? 'voice on' : 'voice off';
-    }
+  // browser refused has to look like a refusal, not like a switch that does nothing.
+  onState: now => {
+    ownAudio = now;
+    setStatusLine(ownAudio.error || state, !!ownAudio.error);
+    paintButtons();
   },
 });
 window.audio = audio; // for a transcript page and for devtools, as window.face is
+// The row, painted from everything known about it: the two switches this page owns, whether zrb can
+// reach them at all, and what this page's own audio answered. A button whose press nothing would hear
+// is disabled rather than removed — the row stays where the hand expects it, and its word says why.
+function paintButtons() {
+  // What zrb calls itself, said in the row instead of the bare word "zrb": a page that knows her name
+  // should use it where it says what she cannot do. Empty until zrb has spoken, so the first seconds
+  // of a page read as they always did.
+  const who = reach.name || 'zrb';
+  // A refusal names the direction it came from, and only that button wears it: a microphone the
+  // browser refused must not read as a refused speaker, or the other way round.
+  const micError = ownAudio.error?.startsWith('microphone') ? ownAudio.error : '';
+  const voiceError = ownAudio.error?.startsWith('speaker') ? ownAudio.error : '';
+  if (talkButton) {
+    talkButton.disabled = !reach.listening;
+    talkButton.classList.toggle('on', !!ownAudio.mic);
+    talkLabel.textContent = micError ? 'refused'
+      : ownAudio.mic ? 'listening…'
+      : reach.listening ? 'hold to talk'
+      : reach.remote ? `${who} isn't listening` : `${who} can't hear you`;
+  }
+  if (voiceButton) {
+    voiceButton.disabled = !reach.remote; // a mute that only quietens a page zrb does not speak through
+    voiceButton.classList.toggle('on', !!ownAudio.ears);
+    voiceIcon.textContent = ownAudio.ears ? '🔊' : '🔇'; // the icon says it before the word does
+    voiceLabel.textContent = voiceError ? 'refused' : ownAudio.ears ? 'voice on' : 'voice off';
+  }
+  if (lensButton) {
+    // A camera zrb cannot ask this page for is a grant with nothing behind it: `/frame` goes to the
+    // server its voice names, so with the voice elsewhere these names are names nobody asks.
+    lensButton.disabled = !reach.remote;
+  }
+}
+// Before zrb has said anything — and for as long as it says nothing — the row says that nothing can
+// reach it yet, rather than offering a press that would go nowhere.
+paintButtons();
 
 // The camera in this page, which is the phone's: zrb asks for one photo at a time (see camera.js).
 // The names are published on the way up, without asking anything, so a page allowed a camera in an
@@ -487,7 +522,8 @@ addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
 // it is a page holding this device's audio session to play silence into.
 addEventListener('keydown', e => {
   if (e.key !== 'm' || e.repeat) return;
-  if (audio.listening) return audio.stop();
+  if (audio.listening || audio.hearing) return audio.stop(); // off always works, even once zrb is gone
+  if (!reach.remote || !reach.listening) return; // nothing on the other end of either stream
   audio.startEars();
   audio.startMic();
 });
@@ -532,6 +568,7 @@ desktop.watch(document.querySelectorAll('#controls button, #keys textarea'));
 // become names zrb can ask for (`/photo phone-back`), and the status line says what they are.
 addEventListener('keydown', e => {
   if (e.key !== 'c' || e.repeat) return;
+  if (!reach.remote) return; // a camera zrb cannot ask this page for: the same rule as the button
   pageCamera.ask();
 });
 // And the same press without a keyboard, on the row the window keeps in sight: a window has no key to
@@ -828,6 +865,23 @@ function onEvent({ data }) {
     autonomy = { ...autonomy, ...msg.value };
     her?.blush.set(shy && autonomy.blush);
     followState();
+  } else if (msg.type === 'voice') {
+    // What zrb can do with this page, and whether it can do it now. Applied at once, because the
+    // button is the only thing that says whether a press would be heard, and a page whose zrb just
+    // went away should stop offering one.
+    reach = {
+      remote: !!msg.remote,
+      listening: !!msg.listening,
+      name: typeof msg.name === 'string' ? msg.name : '',
+    };
+    // And nothing is left running behind a button that can no longer be pressed: a speaker or a
+    // microphone zrb has moved away from would otherwise stay open until the page was reloaded, and
+    // the row it left behind offers no way to close it. The camera goes the same way, because a grant
+    // zrb can no longer ask for is a permission this page has no button to take back.
+    if (!reach.remote && audio.hearing) audio.stopEars();
+    if (!reach.listening && audio.listening) audio.stopMic();
+    if (!reach.remote && pageCamera.names.length) pageCamera.release();
+    paintButtons();
   } else if (msg.type === 'emotion' && msg.source !== 'user' && autonomy.emotion) {
     // Hers only: she answers the user's tone in her reply, which carries its own emotion.
     her.expression.show(msg.value, msg.strength);

@@ -97,6 +97,11 @@
   #controls button:active, #controls button.on {
     color: #eaf6ff; border-color: var(--glow); background: rgba(9, 11, 18, .9);
   }
+  /* A button whose press nothing would hear, or whose switch has nothing behind it: zrb's voice is not
+     this page's, or it is not reading the microphone right now. Dimmed rather than removed, so the row
+     stays where the hand expects it and its word can say why (see `reach` in js/main.js). */
+  #controls button:disabled { opacity: .4; cursor: default; }
+  #controls button:disabled:hover { border-color: rgba(143, 168, 196, .38); }
   /* What she is doing, beside the buttons rather than under her: a page says it on the status line it
      already has, and a window has no status line. It carries its own dark backdrop, because it floats
      over whatever the window does -- a white page left the old amber on white all but invisible -- and
