@@ -81,8 +81,18 @@ export function createCamera({ onState, page = '' } = {}) {
     return reporting;
   }
 
+  // And the reading of the names belongs to the same operation as the writing of them. `enumerateDevices()`
+  // is a promise of its own, and it answers with what was true when it was asked: a publish started on load,
+  // before any grant, could come back after the grant's own publish and hand the server its pre-grant empty
+  // list behind the new names. The camera went away while the button read "camera on", which is what the
+  // review of PR #34 found on 2026-11-28. So each operation takes a number, and one that comes back after
+  // a newer operation was asked for is dropped: a state nobody wants any more never reaches the server.
+  let asked = 0;
+
   async function publish() {
+    const mine = ++asked;
     const found = await videoInputs();
+    if (mine !== asked) return names; // a grant, a press or a photo asked again while this was reading
     // A page not allowed a camera knows only how many it has: "camera 2" is a position rather than a name,
     // so it is neither offered to zrb nor worn by the camera button. A button reading "camera on" over a
     // camera nobody granted spends its first press taking back a name that was never given, and the press
@@ -171,6 +181,7 @@ export function createCamera({ onState, page = '' } = {}) {
   // The key: ask for a camera and give it straight back, so the browser's question is asked once,
   // on purpose, and the names it was keeping become known.
   async function ask() {
+    const mine = ++asked;
     const started = navigator.mediaDevices?.getUserMedia
       ? navigator.mediaDevices.getUserMedia({ video: true, audio: false })
       : Promise.reject({ name: 'NotFoundError' });
@@ -181,6 +192,9 @@ export function createCamera({ onState, page = '' } = {}) {
     } catch (e) {
       error = whyNot(e, '');
     }
+    // A press taken back while the browser was still asking is not a camera this page offers: the answer
+    // to the prompt arrives whether or not anyone is waiting for it any more.
+    if (mine !== asked) return;
     changed();
     await publish();
   }
@@ -189,6 +203,7 @@ export function createCamera({ onState, page = '' } = {}) {
   // photo opens a camera for its one picture and closes it again -- so what is switched off is the
   // permission to be asked, which is all this page holds between photos.
   async function release() {
+    asked++; // whatever is still reading the cameras is reading a state this press has just replaced
     names = [];
     error = '';
     changed();

@@ -1757,6 +1757,19 @@ assert "let reporting = Promise.resolve();" in camera and "reporting = reporting
 assert "await report(names);" in camera, (
     "the names the page found are written nowhere, so zrb is never told the camera came on"
 )
+# And the reading is part of the same operation as the writing, not the writing alone: `enumerateDevices()`
+# answers with what was true when it was asked, so a publish started on load -- before any grant -- could
+# finish after the grant's own and post its pre-grant empty list behind the new names. A reading a newer
+# press has overtaken is dropped instead of reported. The review of PR #34 found that on 2026-11-28.
+assert "const mine = ++asked;" in camera and "if (mine !== asked) return names;" in camera, (
+    "a reading of the cameras from before a grant still reaches the server after the grant's own"
+)
+assert "asked++;" in camera, (
+    "an off press leaves a reading in flight, which can put the names back on afterwards"
+)
+assert "if (mine !== asked) return;" in camera, (
+    "a press taken back while the browser was asking comes back on when the browser answers it"
+)
 # And each button carries an icon beside its word, so the row is read before it is read.
 assert page_html.count('class="icon"') == 3 and "#controls .icon" in page_html, (
     "the window's buttons are words only, in a row nobody can aim at without reading"
