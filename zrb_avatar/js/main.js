@@ -116,20 +116,21 @@ function resize() {
 // The canvas is the part of the page the controls leave. Running it the whole height of a phone put the
 // text box over her boots, and the box is fixed at the foot with nothing she is drawn into going under
 // it: face.html measures that stack into --bottom-h, so the number is read here rather than guessed.
+// How tall the canvas is: the whole window, with the row and the box floating over her boots rather
+// than below the canvas. On Android the fixed stack sits at the visual bottom while `innerHeight`
+// reports the taller layout viewport, so measuring "up to the stack" drew her into a canvas taller
+// than the room she had -- a fault a desktop browser and Chrome's emulation both hide.
+//
+// A phone's keyboard is the other half of the same thing: it takes a third of the height, and a canvas
+// that followed it drew her a third smaller for as long as the box was open. A page used to remember the
+// tallest window seen at a width so that could not happen -- but no resize can then be told from the
+// keyboard's, and a browser window made shorter kept a canvas of the old height, with her drawn below the
+// bottom of the screen. The review of PR #34 found that twice, and found the remembered height still
+// guessing wrong with the box in focus on 2026-11-28. So nothing is remembered: the canvas follows the
+// window on both surfaces, she is a third smaller while an Android keyboard takes a third of the height
+// and back when it closes, and on iOS she does not move at all, where the keyboard leaves innerHeight be.
 function freeHeight() {
-  // The app has no foot: its window is her body and carries no controls, so the whole window is the
-  // canvas. The class arrives at the top of this module, before anything is measured — reading
-  // --bottom-h there would shorten the app's canvas by a stack it never shows.
-  if (document.documentElement.classList.contains('app')) return innerHeight;
-  // Where the stack actually is, not the window less a number. On an Android phone the fixed stack sits
-  // at the visual bottom while `innerHeight` reports the taller layout viewport, so the arithmetic left
-  // the canvas about thirty CSS pixels too tall and her boots were drawn behind the text box -- a fault
-  // that a desktop browser and Chrome's emulation both hide. The stack's own top is the free area.
-  const stack = document.getElementById('bottom');
-  const top = stack ? stack.getBoundingClientRect().top : 0;
-  if (top > 0) return Math.max(120, Math.round(top));
-  const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-h')) || 0;
-  return Math.max(120, innerHeight - bar);
+  return Math.max(120, innerHeight);
 }
 const viewport = () => [innerWidth, freeHeight()];
 addEventListener('resize', resize);
@@ -292,28 +293,45 @@ function setState(value) {
   if (value === 'idle' && (state === 'thinking' || state === 'tool')) her?.expression.smileSoon(); // done: a smile
   state = LOOK[value] ? value : 'idle';
   document.documentElement.style.setProperty('--glow', LOOK[state]);
-  if (!loading && !loadError) setStatusLine(state); // a load in flight, or one that failed, owns the line
+  if (!loading && !loadError) { setStatusLine(state); sayState(); } // a load in flight, or one that failed, owns the line
   followState();
 }
 
 // Her ears and mouth on this page: a microphone zrb hears, and a speaker her voice comes out of. Kept
 // outside `her` because the audio outlives any one model and has to survive the swap, and opened by
 // nothing on load — a browser refuses a microphone and a sound before a gesture, and a refusal reads
-// as a broken page rather than as a browser doing its job. The key below is the gesture.
-const micKey = document.getElementById('mic'); // the hint's own `m`, which says what it will do next
-const cameraKey = document.getElementById('camera'); // and its `c`, which says what it already did
-const firstKey = document.querySelector('#keys .first'); // the line that says how to start at all
+// as a broken page rather than as a browser doing its job. The buttons below are the gesture.
+const talkButton = document.getElementById('talk'); // the microphone without a keyboard, held open by a press
+const talkLabel = document.getElementById('talk-label'); // its word, which the icon sits beside
+const voiceButton = document.getElementById('voice'); // her voice, without a keyboard to press `m` for
+const voiceLabel = document.getElementById('voice-label');
+const voiceIcon = document.querySelector('#voice .icon'); // a speaker with a bar through it while off
+const lensButton = document.getElementById('lens'); // the camera, for a hand with no `c` to press
+const lensLabel = document.getElementById('lens-label');
+const stateLabel = document.getElementById('state'); // what she is doing, in the window's own row
+const controlsRow = document.getElementById('controls'); // that row, placed beside her feet
 const audio = createAudio({
   // Said on the status line, where a model that will not load says its piece: a microphone the
   // browser refused has to look like a refusal, not like a switch that does nothing. And the key in
   // the hint changes with it — `m talk and listen`, then `m stop` — because a press that leaves
   // nothing looking different is a page that seems not to have heard the press.
-  onState: ({ mic, error }) => {
+  onState: ({ mic, ears, error }) => {
     setStatusLine(error || state, !!error);
-    if (micKey) micKey.textContent = error ? 'refused' : mic ? 'stop' : 'talk and listen';
-    // And the manual is done once it has been used: "tap or click the page, then:" is advice for a page
-    // nobody has touched, and it was still standing under a phone whose ears were already on.
-    if (firstKey && mic) firstKey.hidden = true;
+    // A refusal names the direction it came from, and only that button wears it: a microphone the
+    // browser refused must not read as a refused speaker, or the other way round.
+    const micError = error?.startsWith('microphone') ? error : '';
+    const earsError = error?.startsWith('speaker') ? error : '';
+    // And each button says what its own press did: a press that leaves nothing looking different is a
+    // page that seems not to have heard the press.
+    if (talkButton) {
+      talkButton.classList.toggle('on', !!mic);
+      talkLabel.textContent = micError ? 'refused' : mic ? 'listening…' : 'hold to talk';
+    }
+    if (voiceButton) {
+      voiceButton.classList.toggle('on', !!ears);
+      voiceIcon.textContent = ears ? '🔊' : '🔇'; // the icon says it before the word does
+      voiceLabel.textContent = earsError ? 'refused' : ears ? 'voice on' : 'voice off';
+    }
   },
 });
 window.audio = audio; // for a transcript page and for devtools, as window.face is
@@ -329,13 +347,12 @@ const pageCamera = createCamera({
     // one look the same. A refusal is not suppressed — that is news nobody else has.
     if (!error && loading) return;
     setStatusLine(error || (names.length ? `camera: ${names.join(', ')}` : state), !!error);
-    // And the hint says what the press did. `c` gives the camera back on purpose — it is a grant, not
-    // a stream, and a photo is taken only when zrb asks for one — so a label that still reads "allow
-    // this camera" after it was allowed is the page hiding the half of the answer a hand cares about.
-    if (cameraKey) {
-      cameraKey.textContent = error ? 'refused'
-        : names.length ? `${names.length} camera${names.length > 1 ? 's' : ''} ready`
-        : 'allow this camera';
+    // And the window's own button says it in one word, on the row: a press that leaves it reading the
+    // same thing is a press that looks like nothing happened. On is being askable -- a second press
+    // takes the names back and it reads "camera off" again.
+    if (lensButton) {
+      lensLabel.textContent = error ? 'refused' : names.length ? 'camera on' : 'camera off';
+      lensButton.classList.toggle('on', !error && names.length > 0);
     }
   },
 });
@@ -453,9 +470,15 @@ try {
 // Typing a key is not pressing it: the text box takes its own keys, so a message with an `m` in it
 // does not also start the microphone, and one with a `c` does not ask for the camera. Registered
 // first, and in the capture phase, so it runs before the listeners below rather than after them.
+//
+// Enter is the exception, and it is the box's own key: a textarea does not submit a form on Enter, so the
+// only thing that can send a typed line is the box's own handler -- and stopping the key here killed that
+// handler, leaving a phone that types a message and sends nothing (review of PR #34, 2026-11-28).
 addEventListener('keydown', e => {
   const target = e.target;
-  if (target instanceof Element && target.closest('input, textarea')) e.stopImmediatePropagation();
+  if (!(target instanceof Element) || !target.closest('input, textarea')) return;
+  if (e.key === 'Enter') return; // Enter sends, and Shift+Enter is the box's own newline
+  e.stopImmediatePropagation();
 }, true);
 addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
 // M is the microphone, and with it her voice out of the speaker: one gesture is what a browser asks
@@ -471,18 +494,62 @@ addEventListener('keydown', e => {
 // And both are let go when the page goes away, for the same reason: a graph and a request that only
 // the page can end do not end themselves.
 addEventListener('pagehide', () => audio.stop());
+// Hold to talk, for the hand that has no keyboard: a press is the gesture a browser wants, and letting
+// go closes the microphone, so zrb hears only what was said on purpose. Her voice is the button beside
+// it, not this one: a mute that the microphone quietly undid would be no mute at all.
+if (talkButton) {
+  // Whether the microphone that is open belongs to this press: `m` or the voice button may have opened
+  // one that outlives it, and a window that lost the cursor mid-hold must not close a microphone nobody
+  // let go of. So a press records whether it opened one, and only that press closes it.
+  let holding = false, owned = false;
+  const hold = () => {
+    holding = true;
+    owned = !audio.listening;
+    audio.startMic();
+  };
+  const letGo = () => {
+    if (!holding) return;
+    holding = false;
+    // `stopMic` cancels a start that is still on its way as well as one that is running: releasing the
+    // button while the browser is still asking for the microphone used to leave that start to finish,
+    // and the microphone stayed open with the button up. The press owns the start, so it ends it.
+    if (owned) audio.stopMic();
+    owned = false;
+  };
+  talkButton.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    talkButton.setPointerCapture(e.pointerId); // the release is heard even off the button
+    hold();
+  });
+  talkButton.addEventListener('pointerup', letGo);
+  talkButton.addEventListener('pointercancel', letGo);
+  addEventListener('blur', letGo); // a press that lost the pointer stops what it opened, and nothing else
+}
+// And an app that passes clicks through must take the ones that land on a control: without this the
+// talk button is a button the window sends to whatever is behind it.
+desktop.watch(document.querySelectorAll('#controls button, #keys textarea'));
 // C is the camera: the same one gesture a browser asks for, so the names it was keeping private
 // become names zrb can ask for (`/photo phone-back`), and the status line says what they are.
 addEventListener('keydown', e => {
   if (e.key !== 'c' || e.repeat) return;
   pageCamera.ask();
 });
-// A tap is the press a phone has instead of a key, so the two buttons in the hint bar carry the key
-// they stand for and go through these same listeners. The tap is the gesture a browser asks for
-// before a microphone or a camera — which is why nothing here needs a keyboard to be present.
-for (const button of document.querySelectorAll('#keys [data-key]')) {
-  button.addEventListener('click', () => dispatchEvent(new KeyboardEvent('keydown', { key: button.dataset.key })));
+// And the same press without a keyboard, on the row the window keeps in sight: a window has no key to
+// press, and a camera nobody can allow is a camera zrb never gets to ask for. A second press takes the
+// names back, so this page stops being a camera zrb can ask for -- the key above only ever asks.
+if (lensButton) {
+  lensButton.addEventListener('click', () =>
+    (pageCamera.names.length ? pageCamera.release() : pageCamera.ask()));
 }
+// Her voice has a button of its own, beside the microphone's rather than inside it: the press is the
+// gesture a browser wants before any sound at all, and from then on her voice stays on until it is
+// turned off. It does not follow the microphone, so "listening, and she is silent" is a state you can
+// see and choose — a mute the next press quietly undid would be no mute.
+if (voiceButton) {
+  voiceButton.addEventListener('click', () => (audio.hearing ? audio.stopEars() : audio.startEars()));
+}
+// A tap on her is the page's, and the canvas refuses the browser's own gestures; the row of buttons is
+// the gesture a browser asks for before a microphone, a sound or a camera.
 addEventListener('wheel', e => { e.preventDefault(); her.framing.onWheel(e); her.view.notice(); }, { passive: false }); // not the page's own zoom
 // A phone has a finger instead of a wheel. A drag orbits her and a pinch resizes her, starting on the
 // canvas alone: the keys and the box are elements above it, so a tap there is still a tap and never a
@@ -534,20 +601,106 @@ let subtitleHold = 0, subtitleTimer = 0, statusText = '', sentenceUp = false, cl
 // The window may hang past an edge of the display — only her anchor is kept on it (app/main.js) —
 // and a line centred on the window would lose its first words out there. Centre it on the part of
 // the window that is on the screen instead, measured from the window's own place on the display.
+// The part of the window the display actually shows: the window may hang past an edge of the screen,
+// and anything placed on the part that is not there cannot be seen or pressed.
+function shownRect() {
+  const availLeft = screen.availLeft ?? 0, availTop = screen.availTop ?? 0;
+  const availWidth = screen.availWidth || innerWidth, availHeight = screen.availHeight || innerHeight;
+  return {
+    left: Math.max(0, availLeft - screenX),
+    top: Math.max(0, availTop - screenY),
+    right: innerWidth - Math.max(0, screenX + innerWidth - (availLeft + availWidth)),
+    bottom: innerHeight - Math.max(0, screenY + innerHeight - (availTop + availHeight)),
+  };
+}
 function placeSubtitle() {
-  const availLeft = screen.availLeft ?? 0;
-  const availTop = screen.availTop ?? 0;
-  const availWidth = screen.availWidth || innerWidth;
-  const availHeight = screen.availHeight || innerHeight;
-  const left = Math.max(0, availLeft - screenX);
-  const right = Math.max(0, screenX + innerWidth - (availLeft + availWidth));
-  const below = Math.max(0, screenY + innerHeight - (availTop + availHeight));
-  const visible = Math.max(1, innerWidth - left - right);
-  subtitleEl.style.left = `${Math.round(left + visible / 2)}px`;
+  const shown = shownRect();
+  const visible = Math.max(1, shown.right - shown.left);
+  subtitleEl.style.left = `${Math.round(shown.left + visible / 2)}px`;
   subtitleEl.style.maxWidth = `min(${Math.round(visible * 0.92)}px, 40em)`;
-  subtitleEl.style.bottom = `${30 + Math.round(below)}px`;
+  // `shown.bottom` counts down from the top of the window; a CSS `bottom` counts up from its bottom
+  // edge, so the inset is what is left. Read the other way the line went a window's height above the
+  // top and was never seen at all -- the fault that hid the caption on 2026-11-28.
+  //
+  // In the window the row of buttons is placed beside the model's feet, and the line belongs under it
+  // rather than over it (Go, 2026-11-28): the framing keeps air below the feet, and that air is where a
+  // caption reads best. Where there is not enough of it, the line goes above the row, which is where it
+  // was. On a page there is no such row: the line clears the foot stack instead.
+  const inset = Math.max(0, innerHeight - shown.bottom);
+  const foot = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-h')) || 0;
+  const row = controlsRow?.classList.contains('placed') ? controlsRow.getBoundingClientRect() : null;
+  const height = subtitleEl.offsetHeight || 0;
+  const underRow = row ? innerHeight - row.bottom - CONTROLS_GAP - height : -Infinity;
+  const aboveRow = row ? Math.max(0, innerHeight - row.top) + 10 : 0; // its place before, kept as a fallback
+  const aboveFoot = Math.max(30 + inset, foot + 12, aboveRow);
+  // Four pixels of the line's own, so a caption never sits on the window's edge.
+  subtitleEl.style.bottom = `${Math.round(Math.max(4, underRow >= 4 ? underRow : aboveFoot))}px`;
 }
 addEventListener('resize', placeSubtitle);
+// And the window's row of controls is placed against her, not against the window: a see-through window
+// has no corner of its own, and the part of it that is on the screen is not always the part she is on.
+// Her stance is what is measured -- hips and both feet -- because a gesture swings her hands further
+// than a row of buttons should follow, and the prism the framing fits reaches further still.
+//
+// The row is put down once and left there. It moves again only when she has moved further than a
+// finger's width from where it was, or when the other side of her has clearly more room: a row that
+// follows every sway is a row that slides under the pointer trying to press it.
+const STANCE_BONES = ['hips', 'leftFoot', 'rightFoot'];
+const CONTROLS_GAP = 8; // px between her and the row, and between the row and an edge of the screen
+const DRIFT = 24; // px she may move before the row is put down again
+const CROSS_ROOM = 64; // px more room the other side needs before the row crosses her
+const PLACE_MS = 250; // she moves when the camera does, and a button does not need every frame
+const herPoint = new THREE.Vector3();
+let placedAt = 0;
+let placed = null; // where the row was last put down, and on which side of her
+function stance() {
+  const h = her?.vrm.humanoid;
+  if (!h) return null;
+  const width = innerWidth, height = freeHeight();
+  let left = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const name of STANCE_BONES) {
+    const bone = h.getNormalizedBoneNode(name);
+    if (!bone) continue;
+    bone.getWorldPosition(herPoint).project(camera);
+    const x = (herPoint.x + 1) / 2 * width, y = (1 - herPoint.y) / 2 * height;
+    left = Math.min(left, x); right = Math.max(right, x); bottom = Math.max(bottom, y);
+  }
+  return Number.isFinite(left) ? { left, right, bottom } : null;
+}
+// The side of her with room, kept unless the other side is clearly roomier: an orbit that takes her
+// past the middle of the window must not send the buttons hopping side to side.
+function sideFor(room) {
+  if (!placed) return room.right >= room.left ? 'right' : 'left';
+  if (placed.side === 'right' && room.left > room.right + CROSS_ROOM) return 'left';
+  if (placed.side === 'left' && room.right > room.left + CROSS_ROOM) return 'right';
+  return placed.side;
+}
+function placeControls(force) {
+  if (!controlsRow || !document.documentElement.classList.contains('app')) return;
+  const now = Date.now();
+  if (!force && now - placedAt < PLACE_MS) return;
+  placedAt = now;
+  const body = stance();
+  if (!body) return; // still loading: the stylesheet's place holds until she is there
+  const shown = shownRect();
+  const rowWidth = controlsRow.offsetWidth, rowHeight = controlsRow.offsetHeight;
+  const side = sideFor({ left: body.left - shown.left, right: shown.right - body.right });
+  const x = side === 'right'
+    ? Math.min(body.right + CONTROLS_GAP, shown.right - rowWidth - CONTROLS_GAP)
+    : Math.max(body.left - CONTROLS_GAP - rowWidth, shown.left + CONTROLS_GAP);
+  const y = Math.min(
+    Math.max(body.bottom - rowHeight, shown.top + CONTROLS_GAP),
+    shown.bottom - rowHeight - CONTROLS_GAP,
+  );
+  const settled = placed && placed.side === side
+    && Math.abs(x - placed.x) <= DRIFT && Math.abs(y - placed.y) <= DRIFT;
+  if (settled && !force) return; // close enough to where it is: leaving it still is the whole point
+  placed = { x, y, side };
+  controlsRow.style.left = `${Math.round(x)}px`;
+  controlsRow.style.top = `${Math.round(y)}px`;
+  controlsRow.classList.add('placed'); // from here the row is where this puts it, not in the flow
+}
+addEventListener('resize', () => placeControls(true));
 function hideSubtitle() {
   clearTimeout(subtitleTimer);
   subtitleTimer = 0;
@@ -575,8 +728,21 @@ function showStatus() {
   placeSubtitle();
   subtitleEl.classList.add('on', 'status');
 }
+// What the window's row says, written from one place: the status sentence while one is up, otherwise the
+// state word, and nothing when she is idle -- a row that reads "idle" between turns is a label rather than
+// news. A state event used to write only the page's line, which a window hides, so the window's row stayed
+// empty through "thinking" and "working" and changed only when a status happened to arrive (the review of
+// PR #34, 2026-11-28). A page hides the row and keeps its line, so this is free there.
+function sayState() {
+  if (failure || loadError) return; // the line says the failure, and a state event must not paint over it
+  const said = statusText || (state === 'idle' ? '' : state);
+  if (!stateLabel || stateLabel.textContent === said) return;
+  stateLabel.textContent = said; // the window's row says it, beside her, always in sight
+  placeControls(true); // the row is wider or narrower now, and may have to move to fit
+}
 function setStatus(text) {
   statusText = typeof text === 'string' ? text.trim() : '';
+  sayState();
   if (sentenceUp) return;  // what she is saying wins until it goes
   if (statusText) showStatus(); else hideSubtitle();
 }
@@ -693,6 +859,7 @@ renderer.setAnimationLoop(() => {
   blush.update(dt);
   renderer.render(scene, camera);
   desktop.drawn();
+  placeControls(); // beside her feet, which move when the camera or the zoom does
   expression.undo();
   pose.undo();
   dt = 0;

@@ -23,11 +23,6 @@ export function createCamera({ onState, page = '' } = {}) {
 
   const changed = () => onState?.({ names, error });
 
-  // A camera without a label is still a camera: the page has not been allowed one, so the browser
-  // is keeping the names to itself, and "camera 2" is a name zrb can be given to ask for the same
-  // one again -- by position, which is all that is known.
-  const nameOf = (device, i) => device.label || `camera ${i + 1}`;
-
   function videoInputs() {
     if (!navigator.mediaDevices?.enumerateDevices) return Promise.resolve([]);
     return navigator.mediaDevices
@@ -70,25 +65,43 @@ export function createCamera({ onState, page = '' } = {}) {
   // asks, and a page that reloaded says its piece again on the way up. The page goes with them,
   // because a name is only one page's: two pages are normal now -- a laptop and a phone -- and zrb
   // asks a photo of the page that named the camera rather than of every page in the room.
-  async function publish() {
-    const found = await videoInputs();
-    names = found.map(nameOf);
-    changed();
-    // A page not allowed a camera knows only how many it has: "camera 2" is a position rather
-    // than a name, so it is not reported and zrb is never handed one to ask for. An empty report
-    // is still a report -- the server drops a page's names when one is handed to it -- and that
-    // is how a camera whose permission was taken away stops being offered. Returning early here
-    // would leave the old names standing, and zrb would keep asking a page that can no longer
-    // answer.
-    const report = found.some(device => device.label) ? names : [];
-    try {
-      await fetch(`frame/devices?page=${encodeURIComponent(page)}`, {
-        method: 'POST',
-        body: JSON.stringify({ devices: report }),
+  //
+  // One at a time: the server keeps whichever report arrives last, so two on their way together can land
+  // in the wrong order. Pressing the button off and on again before the first one finished let the empty
+  // report arrive after the new names and take the camera away from zrb while the button read "camera on".
+  // Queued here instead, so the order they were sent in is the order they arrive in.
+  let reporting = Promise.resolve();
+  function report(list) {
+    const body = JSON.stringify({ devices: list });
+    reporting = reporting
+      .then(() => fetch(`frame/devices?page=${encodeURIComponent(page)}`, { method: 'POST', body }))
+      .catch(() => {
+        // The server is going away; the names are published again on the next grant or photo.
       });
-    } catch {
-      // The server is going away; the names are published again on the next grant or photo.
-    }
+    return reporting;
+  }
+
+  // And the reading of the names belongs to the same operation as the writing of them. `enumerateDevices()`
+  // is a promise of its own, and it answers with what was true when it was asked: a publish started on load,
+  // before any grant, could come back after the grant's own publish and hand the server its pre-grant empty
+  // list behind the new names. The camera went away while the button read "camera on", which is what the
+  // review of PR #34 found on 2026-11-28. So each operation takes a number, and one that comes back after
+  // a newer operation was asked for is dropped: a state nobody wants any more never reaches the server.
+  let asked = 0;
+
+  async function publish() {
+    const mine = ++asked;
+    const found = await videoInputs();
+    if (mine !== asked) return names; // a grant, a press or a photo asked again while this was reading
+    // A page not allowed a camera knows only how many it has: "camera 2" is a position rather than a name,
+    // so it is neither offered to zrb nor worn by the camera button. A button reading "camera on" over a
+    // camera nobody granted spends its first press taking back a name that was never given, and the press
+    // that should have asked for the camera is gone. An empty report is still a report -- the server drops
+    // a page's names when one is handed to it -- which is how a camera whose permission was taken away
+    // stops being offered.
+    names = found.filter(device => device.label).map(device => device.label);
+    changed();
+    await report(names);
     return names;
   }
 
@@ -149,40 +162,73 @@ export function createCamera({ onState, page = '' } = {}) {
 
   // The answer to one ask from zrb, by the id it asked with. A photo also means the browser has now
   // labelled this page's cameras, so they are published: the next ask can name the one just used.
+  const CAMERA_OFF = { refusal: 'this page has its camera off' };
   async function answer(id, device) {
-    const result = await shoot(device);
+    const mine = asked;
+    // A press taken back between the ask and the photo is a photo not taken: the camera is off by the time
+    // this runs, and opening one for a request that arrived while it was on is the one way "off" would not mean
+    // off. The refusal is answered rather than dropped, so the ask ends with words instead of nothing.
+    const result = names.length ? await shoot(device) : CAMERA_OFF;
+    // And a press that lands while the picture is being taken still takes it back: the photo is not sent and
+    // the camera is not published again. An answer that undid the off button would be no switch at all
+    // (review of PR #34, 2026-11-28). The camera the shot opened is still closed by `shoot`'s own finally --
+    // a getUserMedia already on its way cannot be called back, only not used.
+    const ended = mine === asked ? result : CAMERA_OFF;
     try {
       await fetch(`frame?id=${encodeURIComponent(id)}`, {
         method: 'POST',
-        body: JSON.stringify(result),
+        body: JSON.stringify(ended),
       });
     } catch {
       return; // the ask is over either way; a page that cannot answer is a missing photo
     }
-    if (result.image) publish();
+    if (ended.image) publish();
   }
 
   // The key: ask for a camera and give it straight back, so the browser's question is asked once,
   // on purpose, and the names it was keeping become known.
   async function ask() {
+    const mine = ++asked;
     const started = navigator.mediaDevices?.getUserMedia
       ? navigator.mediaDevices.getUserMedia({ video: true, audio: false })
       : Promise.reject({ name: 'NotFoundError' });
+    let stream = null;
     try {
-      const stream = await started;
-      stream.getTracks().forEach(track => track.stop());
+      stream = await started;
       error = '';
     } catch (e) {
       error = whyNot(e, '');
+    } finally {
+      // Given straight back however this ended, and whoever is still waiting for it: a stream nobody holds
+      // is a camera left filming, and a press taken back while the browser was asking is exactly when that
+      // is easy to get wrong (the review of PR #34, 2026-11-28).
+      stream?.getTracks().forEach(track => track.stop());
     }
+    // A press taken back while the browser was still asking is not a camera this page offers: the answer
+    // to the prompt arrives whether or not anyone is waiting for it any more.
+    if (mine !== asked) return;
     changed();
     await publish();
+  }
+
+  // Off: the names go back, so zrb stops asking this page for photos. Nothing is left running -- a
+  // photo opens a camera for its one picture and closes it again -- so what is switched off is the
+  // permission to be asked, which is all this page holds between photos.
+  async function release() {
+    asked++; // whatever is still reading the cameras is reading a state this press has just replaced
+    names = [];
+    error = '';
+    changed();
+    // Queued behind any report still on its way, so the last press is the one the server keeps: an empty
+    // report that overtook a newer one took a camera away while the button read "camera on".
+    await report([]);
   }
 
   return {
     get names() { return [...names]; }, // what this page told zrb it has
     get error() { return error; }, // the last refusal, in words, until the next attempt clears it
     ask,
+    release,
     publish,
     answer,
   };

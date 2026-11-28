@@ -123,6 +123,13 @@ const BLOCK = 0.1;
 // has started. A tenth of a second absorbs a jittery connection without being heard as a delay; past
 // half a second what is waiting is late enough to give up.
 const TARGET = 0.1, LATE = 0.5;
+// Seconds of silence sent as the microphone closes. A pressed button ends an utterance that a held
+// button started, and zrb's cutter only knows that from quiet blocks: it needs a second of them
+// (LLM_DICTATION_SILENCE), while a page that simply stops posting offers the server's own ping — one
+// 20 ms frame every fifteen seconds — so the utterance would close on `max_utterance` half a minute
+// later, or after two and a half minutes of pings. So the release is said as silence, which is what a
+// microphone on this machine would have handed over.
+const CLOSING = 1.5;
 // Seconds the ring holds. Well past LATE, because a block zrb's player hands over whole is never cut
 // for being long: a second of it is a second of her, and dropping its start loses words.
 const RING = 4;
@@ -179,7 +186,7 @@ export function createAudio({ onState } = {}) {
   let listening = false, hearing = false, error = '';
   // Where the microphone's blocks go and what ends them, set with the request and cleared with it,
   // so a block can never be captured into a request that has stopped.
-  let postPcm = null, endPost = null;
+  let postPcm = null, endPost = null, postFinal = null;
   let micStream = null, micContext = null, micNode = null;
   // A start that is on its way, and which one is newest. Two presses of `m` inside one getUserMedia
   // would otherwise both open a graph, and the second would overwrite the first's fields -- so
@@ -207,6 +214,7 @@ export function createAudio({ onState } = {}) {
   function openPost() {
     if (!streamsBody()) return postEachBlock();
     let open = true;
+    postFinal = null; // the closing block goes into this request like any other block
     const body = new ReadableStream({
       start(controller) {
         // A request that went away under the microphone — a server that answered early, a
@@ -257,6 +265,20 @@ export function createAudio({ onState } = {}) {
         .catch(() => {})
         .finally(() => { sent--; });
     };
+    // The closing silence is not speech, and it is not dropped for arriving behind speech: it is the end of
+    // the utterance, with nothing after it to keep alive. Queued on the same chain, so it still arrives
+    // last, and past the bound above -- which exists to let old speech go, not the goodbye. Without this a
+    // release with two posts still in flight said nothing, and the utterance ran to its half-minute timeout
+    // (the review of PR #34, 2026-11-28).
+    postFinal = pcm => {
+      if (!open) return chain;
+      open = false;
+      chain = chain
+        .then(() => fetch('/audio', { method: 'POST', body: pcm, headers: HEADERS }))
+        .then(res => { if (!res.ok) failed(`microphone refused: ${res.status}`); })
+        .catch(() => {});
+      return chain;
+    };
     endPost = () => { open = false; };
   }
 
@@ -264,12 +286,19 @@ export function createAudio({ onState } = {}) {
   // block could still arrive at a controller that had closed, and 'off' has to mean nothing is
   // captured.
   function releaseMic() {
+    // A graph that was running, as against a start that failed before it made one: only the first has
+    // speech behind it to close.
+    const wasListening = !!micNode;
     micNode?.port.close();
     micStream?.getTracks().forEach(track => track.stop());
     micContext?.close().catch(() => {});
     micNode = micContext = micStream = null;
+    // The release, said in the one language the cutter understands (see CLOSING): 16-bit mono, so two
+    // bytes a sample, and every one of them zero. Its own path where the blocks go one at a time, because
+    // that path drops a block to stay current and this one is the end rather than news.
+    if (wasListening) (postFinal ?? postPcm)?.(new Uint8Array(Math.round(RATE * CLOSING) * 2));
     endPost?.();
-    postPcm = endPost = null;
+    postPcm = endPost = postFinal = null;
   }
 
   async function startMic() {
