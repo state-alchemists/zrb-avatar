@@ -122,16 +122,26 @@ function resize() {
 // than the room she had -- a fault a desktop browser and Chrome's emulation both hide.
 //
 // A phone's keyboard is the other half of the same thing: it takes a third of the height, and a canvas
-// that followed it drew her a third smaller for as long as the box was open. So the tallest window seen
-// at the current width is remembered, and the canvas never shrinks below it; turning the phone changes
-// the width, and that starts the measurement again.
+// that followed it drew her a third smaller for as long as the box was open. So while a field has the
+// focus -- the only time a keyboard is up -- the tallest window seen at this width is remembered, and
+// the canvas never shrinks below it; turning the phone changes the width, and that starts again.
+//
+// Every other resize is the window's own, and one made shorter has to take the canvas with it: a height
+// remembered across a plain window resize drew her below the bottom of the screen, which is what the
+// review of PR #34 found on 2026-11-28.
+const typing = () => ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
 let tallWidth = 0, tallHeight = 0;
 function freeHeight() {
   // The window is sized by the framing, both ways: it grows to fit her and shrinks again when the view
   // asks for less. A remembered height there would keep the canvas taller than the window after a shrink
-  // and draw her cropped, with the row placed against stale coordinates -- so only a page, where a
-  // keyboard is the thing that changes the height, remembers the tallest.
+  // and draw her cropped, with the row placed against stale coordinates -- so only a page remembers.
   if (document.documentElement.classList.contains('app')) return Math.max(120, innerHeight);
+  if (!typing()) {
+    // Nothing is being typed into, so no keyboard is up: the canvas follows the window down as well as up.
+    tallWidth = innerWidth;
+    tallHeight = innerHeight;
+    return Math.max(120, tallHeight);
+  }
   if (innerWidth !== tallWidth) {
     tallWidth = innerWidth;
     tallHeight = innerHeight;

@@ -1532,7 +1532,7 @@ assert "dispatchEvent(new Event('resize'))" in page_html, (
 # The app and the page are the same in this now: her canvas is the whole window either way. It used to
 # be the window less the stack on a phone, which meant a hint that wrapped changed her size and the
 # keyboard changed it by a third while a line was typed. A page remembers the tallest window seen at this
-# width (see above), so no keyboard can make her smaller.
+# width while a field has the focus (see above), so no keyboard can make her smaller.
 #
 # The app does not: its window is sized by the framing, both ways, and a remembered height would leave the
 # canvas taller than a window that has just been made shorter -- she would be drawn cropped, with the row
@@ -1540,6 +1540,17 @@ assert "dispatchEvent(new Event('resize'))" in page_html, (
 assert "classList.contains('app')) return Math.max(120, innerHeight)" in re.search(
     r"function freeHeight\(\) \{.*?\n\}", page, re.S).group(0), (
     "a window the framing has just made shorter still draws a canvas of the old height"
+)
+# And neither does a page when nothing is being typed into: the memory is there for the keyboard, and
+# keeping it across a plain window resize drew her below the bottom of a browser window made shorter,
+# which the same review found the same day.
+assert re.search(
+    r"function freeHeight\(\) \{.*?if \(!typing\(\)\) \{.*?return Math.max\(120, tallHeight\);.*?\n\}",
+    page, re.S), (
+    "a page keeps the remembered height after the window itself is made shorter"
+)
+assert "['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)" in page, (
+    "the remembered height is kept for a resize that had no keyboard behind it"
 )
 assert "tallHeight" in page and "innerHeight > tallHeight" in page, (
     "a page's canvas follows the phone's keyboard again, so a line typed on it makes her smaller"
@@ -1724,7 +1735,7 @@ assert "pageCamera.names.length ? pageCamera.release() : pageCamera.ask()" in pa
     "the camera button asks and never takes the names back"
 )
 camera = (server.HERE / "js" / "camera.js").read_text()
-assert "async function release()" in camera and "devices: []" in camera, (
+assert "async function release()" in camera and "await report([])" in camera, (
     "there is no way to tell the server this page is no longer a camera"
 )
 # And the button's "on" is a camera zrb can really ask for, not a count of cameras the page is not allowed
@@ -1736,6 +1747,15 @@ assert "names = found.filter(device => device.label).map(device => device.label)
 )
 assert "names.length ? await shoot(device) : { refusal: 'this page has its camera off' }" in camera, (
     "a photo asked for before the camera was switched off is still taken after it"
+)
+# And the reports go one at a time: the server keeps the last one it receives, so an empty report that
+# overtook the names behind it took the camera away while the button read "camera on". The review of PR
+# #34 found that on 2026-11-28.
+assert "let reporting = Promise.resolve();" in camera and "reporting = reporting" in camera, (
+    "the page's camera reports race each other to the server, and the older one can land last"
+)
+assert "await report(names);" in camera, (
+    "the names the page found are written nowhere, so zrb is never told the camera came on"
 )
 # And each button carries an icon beside its word, so the row is read before it is read.
 assert page_html.count('class="icon"') == 3 and "#controls .icon" in page_html, (

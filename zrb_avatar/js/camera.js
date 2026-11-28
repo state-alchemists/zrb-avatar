@@ -65,6 +65,22 @@ export function createCamera({ onState, page = '' } = {}) {
   // asks, and a page that reloaded says its piece again on the way up. The page goes with them,
   // because a name is only one page's: two pages are normal now -- a laptop and a phone -- and zrb
   // asks a photo of the page that named the camera rather than of every page in the room.
+  //
+  // One at a time: the server keeps whichever report arrives last, so two on their way together can land
+  // in the wrong order. Pressing the button off and on again before the first one finished let the empty
+  // report arrive after the new names and take the camera away from zrb while the button read "camera on".
+  // Queued here instead, so the order they were sent in is the order they arrive in.
+  let reporting = Promise.resolve();
+  function report(list) {
+    const body = JSON.stringify({ devices: list });
+    reporting = reporting
+      .then(() => fetch(`frame/devices?page=${encodeURIComponent(page)}`, { method: 'POST', body }))
+      .catch(() => {
+        // The server is going away; the names are published again on the next grant or photo.
+      });
+    return reporting;
+  }
+
   async function publish() {
     const found = await videoInputs();
     // A page not allowed a camera knows only how many it has: "camera 2" is a position rather than a name,
@@ -75,14 +91,7 @@ export function createCamera({ onState, page = '' } = {}) {
     // stops being offered.
     names = found.filter(device => device.label).map(device => device.label);
     changed();
-    try {
-      await fetch(`frame/devices?page=${encodeURIComponent(page)}`, {
-        method: 'POST',
-        body: JSON.stringify({ devices: names }),
-      });
-    } catch {
-      // The server is going away; the names are published again on the next grant or photo.
-    }
+    await report(names);
     return names;
   }
 
@@ -183,14 +192,9 @@ export function createCamera({ onState, page = '' } = {}) {
     names = [];
     error = '';
     changed();
-    try {
-      await fetch(`frame/devices?page=${encodeURIComponent(page)}`, {
-        method: 'POST',
-        body: JSON.stringify({ devices: [] }),
-      });
-    } catch {
-      // The server is going away; the names it kept go with it.
-    }
+    // Queued behind any report still on its way, so the last press is the one the server keeps: an empty
+    // report that overtook a newer one took a camera away while the button read "camera on".
+    await report([]);
   }
 
   return {
