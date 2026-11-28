@@ -1741,8 +1741,8 @@ assert "pageCamera.names.length ? pageCamera.release() : pageCamera.ask()" in pa
 # beside it only while zrb's voice is this server's — a button that is always there is a button that
 # looks broken when hands-free is off (Go, 2026-11-28).
 assert "msg.type === 'voice'" in page and (
-    "reach = { remote: !!msg.remote, listening: !!msg.listening };" in page
-), "the page never learns whether zrb can hear it"
+    "remote: !!msg.remote,\n      listening: !!msg.listening,\n      name: typeof msg.name === 'string' ? msg.name : ''," in page
+), "the page never learns whether zrb can hear it, or what zrb calls itself"
 assert "talkButton.disabled = !reach.listening;" in page, (
     "the talk button offers a press that nothing is reading the microphone for"
 )
@@ -1752,8 +1752,13 @@ assert "voiceButton.disabled = !reach.remote;" in page and "lensButton.disabled 
 assert "function paintButtons()" in page and "onState: now => {" in page, (
     "the row is painted from more than one place, so one switch undoes what another said"
 )
-assert "zrb can't hear you" in page and "zrb isn't listening" in page, (
+assert "${who} can't hear you" in page and "${who} isn't listening" in page, (
     "a disabled button says nothing about why it is disabled"
+)
+# And it says her name rather than the bare word "zrb": zrb sends what it calls itself with the same
+# event, because the row is the one place on the page that writes about her (Go, 2026-11-28).
+assert "const who = reach.name || 'zrb';" in page, (
+    "the row says 'zrb' where zrb has said its own name"
 )
 # And nothing keeps running behind a button that can no longer be pressed: zrb moving its voice away
 # closes the speaker, the microphone and the camera this page had open, or the page would hold them
@@ -1787,15 +1792,21 @@ assert "def voice_is_here() -> bool:" in tools and "get_remote_url()" in tools, 
 assert "zrb.llm.util.face_server import get_remote_url" in tools, (
     "an older zrb's layout is read as 'no remote voice', so the page turns its own switches off"
 )
-assert 'send, {"type": "voice", "remote": voice}' in tools, (
-    "the plugin never tells the page that zrb's voice moved"
-)
+assert '"remote": voice_is_here(),' in tools and (
+    '"name": str(CFG.LLM_ASSISTANT_NAME or ""),' in tools
+), "the plugin never tells the page that zrb's voice moved, or what zrb calls itself"
 assert "said_voice = None" in tools and "if voice != said_voice:" in tools, (
     "the voice is read once rather than followed, so `/set` leaves the page stale"
 )
 server_py = (server.HERE / "server.py").read_text()
 assert "def voice_state() -> dict:" in server_py and 'event.get("type") == "voice"' in server_py, (
     "the server neither holds what zrb said nor takes its word for it"
+)
+assert '"name": str(_voice["name"]),' in server_py and (
+    '_voice["name"] = name.strip() if isinstance(name, str) else ""'
+) in server_py, "the name zrb sent never reaches a page"
+assert 'or voice["name"]' in server_py, (
+    "a page that connects after zrb named itself is not told the name"
 )
 assert "audio.is_microphone_being_read()" in server_py and (
     "audio.end_reading(\"in\")" in server_py
@@ -2788,12 +2799,15 @@ try:
     watcher.request("GET", "/events")
     watched_voice = watcher.getresponse()
     time.sleep(0.2)
-    assert post_event('{"type":"voice","remote":true}') == 204, "zrb cannot say where its voice is"
+    assert post_event('{"type":"voice","remote":true,"name":"Tara"}') == 204, (
+        "zrb cannot say where its voice is"
+    )
     assert voice_event(watched_voice) == {
         "type": "voice",
         "remote": True,
         "listening": False,
-    }, "a page is not told that zrb's voice has moved onto this server"
+        "name": "Tara",
+    }, "a page is not told that zrb's voice has moved onto this server, or what it is called"
     reader = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     reader.request("GET", "/audio/in")
     held = reader.getresponse()  # held: a response nobody keeps is a socket that closes

@@ -297,7 +297,7 @@ _cameras_lock = threading.Lock()
 # knowledge -- a reader on the microphone route (`audio.is_microphone_being_read`) -- so it needs no
 # word from zrb and cannot go stale. `said` is the last thing the pages were told, so each change
 # reaches them once; the two values themselves are the answer a connecting page gets.
-_voice: dict = {"remote": False, "said": None}
+_voice: dict = {"remote": False, "name": "", "said": None}
 # Which page each event stream is, by the id that page gave at /events?page=<id>. Held with the pages
 # themselves, because it is discarded with them.
 _page_ids: dict[queue.Queue, str] = {}
@@ -1225,16 +1225,21 @@ def broadcast(message: str) -> None:
 
 
 def voice_state() -> dict:
-    """What zrb can do with a page: speak through it, and hear it.
+    """What zrb can do with a page: speak through it, and hear it -- and what to call itself.
 
     `remote` is read without a lock because it is a bool and `_replay` is called with `_lock` held:
     a page that connects while zrb's voice is elsewhere should say so in the same breath as its
     model, not a second later.
+
+    `name` is zrb's own word for her, carried here because the page writes it in the row the
+    switches live in ("Tara can't hear you"), and a page has no way to know it otherwise. Empty
+    until zrb has said something, which a page reads as the old, unnamed word.
     """
     return {
         "type": "voice",
         "remote": bool(_voice["remote"]),
         "listening": audio.is_microphone_being_read(),
+        "name": str(_voice["name"]),
     }
 
 
@@ -1325,11 +1330,13 @@ def _replay(client: queue.Queue, chosen: str | None) -> None:
     ):
         if message:
             client.put(json.dumps(message))
-    # Only when there is something to reach: a page assumes nothing can, so with zrb's voice
-    # elsewhere there is nothing to say — the same rule as the switches above. A page that connects
-    # after it moved here is told, so its first frame is not three buttons that do nothing.
+    # Only when there is something to reach, or something to be called: a page assumes nothing can
+    # reach it, so with zrb's voice elsewhere and no name there is nothing to say -- the same rule
+    # as the switches above. A page that connects after it moved here is told, so its first frame is
+    # not three buttons that do nothing; one that connects after zrb named itself is told too, since
+    # the row it writes the name in is on screen whatever the switches say.
     voice = voice_state()
-    if voice["remote"] or voice["listening"]:
+    if voice["remote"] or voice["listening"] or voice["name"]:
         client.put(json.dumps(voice))
     # Only when she has moved a switch away from its default: a page assumes the defaults, so when
     # that is the truth there is nothing to tell it. The caller holds the lock, so this is the
@@ -1627,8 +1634,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if (
             isinstance(event, dict) and event.get("type") == "voice"
-        ):  # zrb: whether its voice is this server's
+        ):  # zrb: whether its voice is this server's, and what it calls itself
             _voice["remote"] = bool(event.get("remote"))
+            name = event.get("name")
+            _voice["name"] = name.strip() if isinstance(name, str) else ""
             _tell_pages_voice()
             self.send_response(204)
             self.end_headers()
