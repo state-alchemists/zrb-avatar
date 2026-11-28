@@ -147,6 +147,10 @@ def asked_range(header: str | None, size: int) -> tuple[int, int] | None:
         return None
     return start, min(end, size - 1)
 MAX_EVENT_BYTES = 65536
+# How many turns of the conversation the page can be shown. A session runs for hours, and a sheet that
+# grows without end costs memory on the machine and a long first paint on the phone; the newest are the
+# ones worth keeping, and an older one is still in zrb's own history.
+TRANSCRIPT_MESSAGES = 200
 MAX_SNAPSHOT_BYTES = 16_000_000  # a PNG as a data: URL, plus what she is doing
 SNAPSHOT_SECONDS = 6.0  # how long GET /snapshot waits for a page to answer
 # How long a snapshot keeps insisting on a page that shows the chosen model before it
@@ -298,6 +302,12 @@ _cameras_lock = threading.Lock()
 # word from zrb and cannot go stale. `said` is the last thing the pages were told, so each change
 # reaches them once; the two values themselves are the answer a connecting page gets.
 _voice: dict = {"remote": False, "name": "", "said": None}
+# The conversation, as words: what the user sent and what she answered, in order, capped at
+# `TRANSCRIPT_MESSAGES`. zrb's side sends each turn as `{"type": "message", "role": ..., "text": ...}`;
+# nothing here reads zrb's session files, so this server keeps no knowledge of where zrb writes its
+# history -- the one package without a dependency on the other stays that way. A page that connects
+# late is handed this list once (`_replay`) and hears each new turn as it comes.
+_transcript: list[dict] = []
 # Which page each event stream is, by the id that page gave at /events?page=<id>. Held with the pages
 # themselves, because it is discarded with them.
 _page_ids: dict[queue.Queue, str] = {}
@@ -1323,6 +1333,10 @@ def _replay(client: queue.Queue, chosen: str | None) -> None:
     next, because a pose (or a release) arriving between those two would be in neither — the page
     would come up free while she holds, or holding what she has already let go of.
     """
+    # The words come first: a page gets the conversation it was not there for before it is told what she
+    # is doing now, so the sheet opens complete rather than filling in behind a state that has moved on.
+    if _transcript:
+        client.put(json.dumps({"type": "history", "messages": list(_transcript)}))
     for message in (
         _music if _music["value"] else None,
         _model if chosen else None,
@@ -1639,6 +1653,38 @@ class Handler(BaseHTTPRequestHandler):
             name = event.get("name")
             _voice["name"] = name.strip() if isinstance(name, str) else ""
             _tell_pages_voice()
+            self.send_response(204)
+            self.end_headers()
+            return
+        if (
+            isinstance(event, dict) and event.get("type") == "message"
+        ):  # zrb: one turn of the conversation, for the page's history
+            role, text = event.get("role"), event.get("text")
+            if role not in ("user", "assistant") or not isinstance(text, str):
+                return self.send_error(400, "a message is a role and its text")
+            if not text.strip():  # a turn with no words says nothing to a page
+                self.send_response(204)
+                self.end_headers()
+                return
+            turn = {"type": "message", "role": role, "text": text}
+            with _lock:
+                # A turn that ends twice is one answer: a blocking Stop hook re-runs the agent, so the first
+                # words are a draft and the later ones replace them. Two assistant turns with no prompt
+                # between them can only be that, and the pages are handed the whole list rather than a line
+                # to insert -- a page that missed the first answer would otherwise end up holding both.
+                revised = (
+                    role == "assistant"
+                    and bool(_transcript)
+                    and _transcript[-1]["role"] == "assistant"
+                )
+                if revised:
+                    _transcript[-1] = turn
+                    told: dict = {"type": "history", "messages": list(_transcript)}
+                else:
+                    _transcript.append(turn)
+                    del _transcript[:-TRANSCRIPT_MESSAGES]
+                    told = turn
+                _send_all(json.dumps(told))
             self.send_response(204)
             self.end_headers()
             return

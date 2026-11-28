@@ -15,6 +15,7 @@ import { createDesktop } from './desktop.js';
 import { createAudio } from './audio.js';
 import { createCamera } from './camera.js';
 import { createTyped } from './typed.js';
+import { showHistory, addTurn } from './history.js';
 
 // state -> glow colour
 const LOOK = { idle: '#33ccff88', thinking: '#a6f', tool: '#3f9', attention: '#f46', permission: '#f22', speaking: '#6ef' };
@@ -830,6 +831,13 @@ function onEvent({ data }) {
     showSubtitle(msg);
   } else if (msg.type === 'status') {
     setStatus(msg.text);  // what she is doing, up whenever no sentence is
+  } else if (msg.type === 'history') {
+    // Everything said before this page opened, in one message: the same list the server gave every page
+    // that was there already, so the sheet reads back to the start of the session rather than the moment
+    // of connecting.
+    showHistory(Array.isArray(msg.messages) ? msg.messages : []);
+  } else if (msg.type === 'message') {
+    addTurn(msg);  // one turn, as it happens
   } else if (msg.type === 'action') {
     // Resolved once: a name that is a pool picks one of its clips at random, and asking twice
     // could play a different clip than the one the check approved.

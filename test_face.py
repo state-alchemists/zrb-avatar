@@ -140,6 +140,54 @@ finally:
     face_client.send, face_client.SUBTITLE = face_send, subtitle_on
 assert muted == [{"type": "state", "value": "tool"}], muted
 
+# The words of a turn reach the page as well, so a phone that was not at the keyboard can read what was
+# said afterwards. The reply is `last_assistant_message` -- what zrb's own speech reads when a turn ends --
+# so the page shows the words the voice said rather than a second rendering of them.
+class _Spoken(_Context):
+    prompt = "what is on the stove"
+    last_assistant_message = "Rice, and nothing under it."
+
+
+def _every_paint(context, name):
+    """What every hook registered for *name* sends, in order."""
+    paints, face_send = [], face_client.send
+    registry = _Hooks()
+    face_client.face_hooks(registry)
+    face_client.send = paints.append
+    try:
+        for hook, events in registry.registered:
+            if any(getattr(event, "name", "") == name for event in events):
+                asyncio.run(hook(context))
+    finally:
+        face_client.send = face_send
+    return paints
+
+
+def _turns(context, name):
+    return [sent for sent in _every_paint(context, name) if sent["type"] == "message"]
+
+
+assert _turns(_Spoken(), "USER_PROMPT_SUBMIT") == [
+    {"type": "message", "role": "user", "text": "what is on the stove"}
+], "the page never learns what the user asked"
+# Every Stop hook, not the first: a turn ends in more than one place, and the conversation is one of them.
+assert _turns(_Spoken(), "STOP") == [
+    {"type": "message", "role": "assistant", "text": "Rice, and nothing under it."}
+], "the page never learns what she answered"
+
+
+class _NestedSpoken(_Spoken):
+    event_data = {"nested_run": True}
+
+
+class _Silent(_Context):
+    prompt = None
+    last_assistant_message = "   "
+
+
+assert _turns(_NestedSpoken(), "STOP") == [], "a sub-agent's words are put in the conversation"
+assert _turns(_Silent(), "STOP") == [], "a row of spaces is sent to the page as a turn"
+
 # A run a hook starts — the memory reviewer, a sub-agent, a skill — is not the conversation, and
 # zrb marks it with `nested_run` on every hook payload. Painting its prompt as "thinking" leaves
 # the caption saying the user's turn is still running, because nothing tells the window idle when
@@ -468,6 +516,11 @@ assert get("/js/main.js") == (
     200,
     (server.HERE / "js" / "main.js").read_bytes(),
 )  # the page's modules
+# The markdown renderer is this server's own file, not a CDN: a phone on the tailnet may reach nothing
+# else, and the page has no business depending on zrb being installed beside it.
+assert get("/js/marked.js") == (200, (server.HERE / "js" / "marked.js").read_bytes())
+assert get("/js/purify.js") == (200, (server.HERE / "js" / "purify.js").read_bytes())
+assert get("/js/history.js") == (200, (server.HERE / "js" / "history.js").read_bytes())
 assert get("/anim/idle/rest.vrma") == (200, b"override")
 assert get("/anim/actions/wave.vrma") == (200, b"wave")
 assert get("/anim/actions/greetings/hi.vrma") == (200, b"hi")
@@ -1565,6 +1618,39 @@ assert re.search(r"html\.app #status\.error\s*\{[^}]*display:\s*block", page_htm
 visible_html = re.sub(r"<!--.*?-->", "", page_html, flags=re.S)
 for phrase in ("type to her", "a message to her", "her face", "her feet", "drawing her", "loading her animations"):
     assert phrase not in visible_html, f"the page says {phrase!r}, which is one user's avatar"
+# The conversation has a place of its own: a pill while it is closed and a sheet above the box while it is
+# open, so the newest line is where the thumb already is and the model's face is not covered. It is read
+# rather than typed into -- the box below is the only way in, and a second input would be a second thing
+# to keep in step with zrb.
+assert 'id="history-log"' in page_html and 'id="history-handle"' in page_html, (
+    "the page has nowhere to show the conversation"
+)
+assert '<script src="js/marked.js"></script>' in page_html, (
+    "the page renders markdown without the parser zrb's own page uses"
+)
+assert '<script src="js/purify.js"></script>' in page_html, (
+    "the model's words would reach the page unsanitized"
+)
+assert "html.app #history" in page_html, "the window shows a conversation it has no box for"
+assert "showHistory" in page and "addTurn" in page, (
+    "a turn that arrives on the page is never painted"
+)
+history_js = (server.HERE / "js" / "history.js").read_text()
+assert "purify.sanitize(" in history_js and "marked.parse(text, { gfm: true, breaks: true, async: false })" in history_js, (
+    "markdown from the model is put on the page without being sanitized first"
+)
+assert "if (marked && purify)" in history_js and "return `<p>${escaped}</p>`" in history_js, (
+    "a renderer that did not load leaves the conversation blank rather than plain"
+)
+# And the page fetches nothing from a stranger: a picture in a reply would otherwise be requested the moment
+# the sheet paints it, telling that host this page is open. Only an image already in the message is drawn;
+# any other becomes a link the reader opens on purpose (review of PR #36, 2026-11-28).
+assert "reachNothingRemote" in history_js and "image.replaceWith(link)" in history_js, (
+    "a picture in a reply is fetched from its host as soon as the sheet paints it"
+)
+assert "link.rel = 'noopener noreferrer'" in history_js, (
+    "a link in a reply tells its host where the reader came from"
+)
 code_lines = "\n".join(line for line in page.splitlines() if not line.strip().startswith("//"))
 for phrase in ("drawing her", "loading her animations", "can't draw her", "can't load her"):
     assert phrase not in code_lines, f"the status line says {phrase!r}, which is one user's avatar"
@@ -3063,5 +3149,68 @@ try:
 finally:
     server.TOKEN = ""  # back to a plain local run, which is what the rest of this file assumes
 assert guarded("/models")[0] == 200  # nothing set: answered as before
+
+# The conversation, for the page's history: zrb sends a turn as it happens, and a page that was not open
+# for it reads the turns back when it connects. The words arrive from zrb's own side, so nothing here
+# reads zrb's session files -- this server stays the one package without a dependency on the other.
+server._transcript.clear()
+watcher = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+
+
+def next_turn(events) -> dict:
+    """The next turn a page is told, past whatever else it is replayed on connecting."""
+    while True:
+        event = next_event(events)
+        if event["type"] in ("message", "history"):
+            return event
+
+
+watcher.request("GET", "/events")
+watched = watcher.getresponse()
+assert guarded_post("/event", '{"type":"message","role":"user","text":"hello"}') == 204
+assert next_turn(watched) == {"type": "message", "role": "user", "text": "hello"}, (
+    "a turn as it happens is not told to the pages that are open"
+)
+assert guarded_post("/event", '{"type":"message","role":"assistant","text":"**draft**"}') == 204
+assert next_turn(watched) == {"type": "message", "role": "assistant", "text": "**draft**"}
+assert guarded_post("/event", '{"type":"message","role":"system","text":"nope"}') == 400, (
+    "a turn from nobody in the conversation is kept"
+)
+assert guarded_post("/event", '{"type":"message","role":"user","text":"   "}') == 204, (
+    "an empty turn is refused rather than dropped"
+)
+# A turn that ends twice is one answer. A blocking Stop hook re-runs the agent, so the first words are a
+# draft: the later ones replace them rather than joining the conversation, and the pages are handed the
+# whole list so one that missed the draft does not end up holding both.
+assert guarded_post("/event", '{"type":"message","role":"assistant","text":"**hi**"}') == 204
+assert next_event(watched) == {
+    "type": "history",
+    "messages": [
+        {"type": "message", "role": "user", "text": "hello"},
+        {"type": "message", "role": "assistant", "text": "**hi**"},
+    ],
+}, "the second answer to one turn is appended instead of replacing the first"
+assert server._transcript == [
+    {"type": "message", "role": "user", "text": "hello"},
+    {"type": "message", "role": "assistant", "text": "**hi**"},
+], server._transcript
+late_page = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+late_page.request("GET", "/events")
+late_history = late_page.getresponse()
+assert next_event(late_history) == {"type": "history", "messages": server._transcript}, (
+    "a page that opens later does not read what was said before it"
+)
+late_page.close()
+watcher.close()
+# And a long session keeps the newest turns rather than growing without end: the sheet is the last few
+# hours of a conversation, and an older turn is still in zrb's own history.
+saved_cap = server.TRANSCRIPT_MESSAGES
+server.TRANSCRIPT_MESSAGES = 2
+try:
+    assert guarded_post("/event", '{"type":"message","role":"user","text":"third"}') == 204
+    assert [turn["text"] for turn in server._transcript] == ["**hi**", "third"], server._transcript
+finally:
+    server.TRANSCRIPT_MESSAGES = saved_cap
+server._transcript.clear()
 
 print("ok")
