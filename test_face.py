@@ -3154,14 +3154,42 @@ assert guarded("/models")[0] == 200  # nothing set: answered as before
 # for it reads the turns back when it connects. The words arrive from zrb's own side, so nothing here
 # reads zrb's session files -- this server stays the one package without a dependency on the other.
 server._transcript.clear()
+watcher = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+
+
+def next_turn(events) -> dict:
+    """The next turn a page is told, past whatever else it is replayed on connecting."""
+    while True:
+        event = next_event(events)
+        if event["type"] in ("message", "history"):
+            return event
+
+
+watcher.request("GET", "/events")
+watched = watcher.getresponse()
 assert guarded_post("/event", '{"type":"message","role":"user","text":"hello"}') == 204
-assert guarded_post("/event", '{"type":"message","role":"assistant","text":"**hi**"}') == 204
+assert next_turn(watched) == {"type": "message", "role": "user", "text": "hello"}, (
+    "a turn as it happens is not told to the pages that are open"
+)
+assert guarded_post("/event", '{"type":"message","role":"assistant","text":"**draft**"}') == 204
+assert next_turn(watched) == {"type": "message", "role": "assistant", "text": "**draft**"}
 assert guarded_post("/event", '{"type":"message","role":"system","text":"nope"}') == 400, (
     "a turn from nobody in the conversation is kept"
 )
 assert guarded_post("/event", '{"type":"message","role":"user","text":"   "}') == 204, (
     "an empty turn is refused rather than dropped"
 )
+# A turn that ends twice is one answer. A blocking Stop hook re-runs the agent, so the first words are a
+# draft: the later ones replace them rather than joining the conversation, and the pages are handed the
+# whole list so one that missed the draft does not end up holding both.
+assert guarded_post("/event", '{"type":"message","role":"assistant","text":"**hi**"}') == 204
+assert next_event(watched) == {
+    "type": "history",
+    "messages": [
+        {"type": "message", "role": "user", "text": "hello"},
+        {"type": "message", "role": "assistant", "text": "**hi**"},
+    ],
+}, "the second answer to one turn is appended instead of replacing the first"
 assert server._transcript == [
     {"type": "message", "role": "user", "text": "hello"},
     {"type": "message", "role": "assistant", "text": "**hi**"},
@@ -3173,6 +3201,7 @@ assert next_event(late_history) == {"type": "history", "messages": server._trans
     "a page that opens later does not read what was said before it"
 )
 late_page.close()
+watcher.close()
 # And a long session keeps the newest turns rather than growing without end: the sheet is the last few
 # hours of a conversation, and an older turn is still in zrb's own history.
 saved_cap = server.TRANSCRIPT_MESSAGES

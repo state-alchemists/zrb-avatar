@@ -1666,10 +1666,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(204)
                 self.end_headers()
                 return
+            turn = {"type": "message", "role": role, "text": text}
             with _lock:
-                _transcript.append({"type": "message", "role": role, "text": text})
-                del _transcript[:-TRANSCRIPT_MESSAGES]
-                _send_all(json.dumps(_transcript[-1]))
+                # A turn that ends twice is one answer: a blocking Stop hook re-runs the agent, so the first
+                # words are a draft and the later ones replace them. Two assistant turns with no prompt
+                # between them can only be that, and the pages are handed the whole list rather than a line
+                # to insert -- a page that missed the first answer would otherwise end up holding both.
+                revised = (
+                    role == "assistant"
+                    and bool(_transcript)
+                    and _transcript[-1]["role"] == "assistant"
+                )
+                if revised:
+                    _transcript[-1] = turn
+                    told: dict = {"type": "history", "messages": list(_transcript)}
+                else:
+                    _transcript.append(turn)
+                    del _transcript[:-TRANSCRIPT_MESSAGES]
+                    told = turn
+                _send_all(json.dumps(told))
             self.send_response(204)
             self.end_headers()
             return
