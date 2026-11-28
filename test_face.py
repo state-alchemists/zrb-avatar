@@ -1537,8 +1537,18 @@ assert 'classList.contains(\'app\')' not in re.search(
     r"function freeHeight\(\) \{.*?\n\}", page, re.S).group(0), (
     "one of the two is still drawn into a smaller canvas than the other"
 )
-assert "getBoundingClientRect().top" not in page, (
+assert "getBoundingClientRect().top" not in re.search(
+    r"function freeHeight\(\) \{.*?\n\}", page, re.S).group(0), (
     "the canvas's height is the stack's place again, which the keyboard moves"
+)
+# And the caption is placed from the window's bottom edge, not from the top edge of the part of it that
+# is on the screen: read the wrong way round it went a window's height above the top and was never seen
+# at all, which is how Go found it on 2026-11-28. It clears the foot stack and the row besides.
+assert "innerHeight - shown.bottom" in page, (
+    "the caption is placed a window's height above the top of the window"
+)
+assert "const clearRow = Math.max(0, innerHeight - rowTop) + 10;" in page, (
+    "the caption lands on the row of buttons instead of clearing it"
 )
 assert not re.search(r"html\.app #bottom\s*\{[^}]*display:\s*none", page_html), (
     "the app's own error line is hidden with the controls"

@@ -609,7 +609,18 @@ function placeSubtitle() {
   const visible = Math.max(1, shown.right - shown.left);
   subtitleEl.style.left = `${Math.round(shown.left + visible / 2)}px`;
   subtitleEl.style.maxWidth = `min(${Math.round(visible * 0.92)}px, 40em)`;
-  subtitleEl.style.bottom = `${30 + Math.round(shown.bottom)}px`;
+  // `shown.bottom` counts down from the top of the window; a CSS `bottom` counts up from its bottom
+  // edge, so the inset is what is left. Read the other way the line went a window's height above the
+  // top and was never seen at all -- the fault that hid the caption on 2026-11-28.
+  // Three things it must clear: the edge itself, the foot stack, and the row of buttons, which now
+  // floats beside the model's feet over a canvas as tall as the window rather than under it.
+  const inset = Math.max(0, innerHeight - shown.bottom);
+  const foot = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-h')) || 0;
+  const rowTop = controlsRow?.classList.contains('placed')
+    ? controlsRow.getBoundingClientRect().top
+    : innerHeight;
+  const clearRow = Math.max(0, innerHeight - rowTop) + 10; // above the row, where there is one
+  subtitleEl.style.bottom = `${Math.round(Math.max(30 + inset, foot + 12, clearRow))}px`;
 }
 addEventListener('resize', placeSubtitle);
 // And the window's row of controls is placed against her, not against the window: a see-through window
