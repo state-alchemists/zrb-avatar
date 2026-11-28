@@ -3024,6 +3024,29 @@ assert refusals.count("_drain_body") == 2, (
 assert refusals.index("_drain_body") < refusals.index("self.send_error("), (
     "the refusal is written before the body is read, which leaves it in the socket"
 )
+# And a chunk's size is the client's to declare, so a refused chunked body is drained inside the
+# budget rather than by its declared size: a page declaring four mebibytes must not make the server
+# hold four mebibytes to refuse it (review of #37, 2026-11-28). Exactly the budget is sent, so
+# nothing is left unread when the 415 goes out.
+raw = socket.create_connection(("127.0.0.1", port), timeout=5)
+raw.sendall(
+    (
+        "POST /audio HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{port}\r\n"
+        "X-Sample-Rate: 44100\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n"
+        "400000\r\n"  # four mebibytes declared, past the drain's budget
+    ).encode()
+    + b"\x00" * server.audio.MAX_BODY_BYTES
+)
+try:
+    answered = raw.recv(200)
+except socket.timeout:  # the server is still reading the body it was asked to refuse
+    answered = b""
+assert b" 415 " in answered, (
+    "the refusal waited for the body it was refusing instead of draining inside its budget"
+)
+raw.close()
 
 # Her voice, at the rate she was made at: the page configures its AudioContext from the header.
 headers, body = listen_once(
@@ -3231,6 +3254,11 @@ server._transcript.clear()
 stream = server_py[server_py.index("def _stream"):server_py.index("def log_message")]
 assert stream.index("_clients.add(client)") < stream.index('"text/event-stream"'), (
     "a page reads its stream's headers before it is one of the pages that hear a turn"
+)
+assert stream.index("try:") < stream.index('"text/event-stream"') < stream.index(
+    "except OSError"
+), (
+    "a page that goes away while its headers are written stays in the registries forever"
 )
 early = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
 early.request("GET", "/events?page=early-proof")

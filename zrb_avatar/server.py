@@ -1478,13 +1478,12 @@ class Handler(BaseHTTPRequestHandler):
         A request closed with its body still in the socket's receive buffer is reset rather than
         ended, and Windows resets it under the response -- the page then sees a dead server instead
         of the 415 telling it to fix its rate (Windows CI, 2026-11-28). Bounded by *limit*, because
-        a page that is being refused may be sending more than is worth reading to refuse it.
+        a page that is being refused may be sending more than is worth reading to refuse it; a body
+        past that budget is left unread, and its refusal may be reset rather than delivered, which
+        is the price of not reading it.
         """
         if (self.headers.get("Transfer-Encoding") or "").strip().lower() == "chunked":
-            for block in self._chunks():
-                limit -= len(block)
-                if limit <= 0:
-                    return
+            self._drain_chunks(limit)
             return
         try:
             size = int(self.headers.get("Content-Length") or 0)
@@ -1497,6 +1496,32 @@ class Handler(BaseHTTPRequestHandler):
             if not block:
                 return
             size -= len(block)
+
+    def _drain_chunks(self, limit: int) -> None:
+        """A chunked body thrown away, never reading more than *limit* in one piece.
+
+        A chunk's size is the client's to declare, and `_chunks` reads a declared chunk whole: a
+        refused page that declares four gigabytes would have the server hold four gigabytes to
+        refuse it. So a chunk is discarded in pieces, and the budget ends the drain wherever it
+        lands, leaving the rest unread (review of #37, 2026-11-28).
+        """
+        while limit > 0:
+            line = self.rfile.readline(64)
+            try:
+                size = int(line.split(b";")[0].strip(), 16)
+            except ValueError:
+                return
+            if size <= 0:
+                return  # the last chunk, or a page that stopped saying anything at all
+            while size > 0 and limit > 0:
+                block = self.rfile.read(min(size, 65536, limit))
+                if not block:
+                    return
+                size -= len(block)
+                limit -= len(block)
+            if size > 0:
+                return  # the budget ran out mid-chunk, and what is left is not read
+            self.rfile.read(2)  # the CRLF a chunk ends with, which is not audio
 
     def _json(self, value) -> None:
         self._send(json.dumps(value).encode(), "application/json")
@@ -2034,15 +2059,19 @@ class Handler(BaseHTTPRequestHandler):
             if shows:
                 _showing[client] = shows
             _replay(client, chosen)
-        # The stream is opened after the page joins, not before. Headers are the moment a page
-        # believes it can be told, so a turn posted in the gap between opening the stream and
-        # joining the pages went to the listeners that were already there, and this one missed the
-        # words said while it connected. A slow machine widens that gap — macOS CI found it.
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
         try:
+            # The stream is opened after the page joins, not before. Headers are the moment a page
+            # believes it can be told, so a turn posted in the gap between opening the stream and
+            # joining the pages went to the listeners that were already there, and this one missed
+            # the words said while it connected. A slow machine widens that gap — macOS CI found it.
+            #
+            # Inside this `try`, because the page is a page from the line above: one that reloads in
+            # the middle of these writes has to leave the registries as surely as one that goes away
+            # later, or its queue is fed forever and its cameras are never forgotten (review of #37).
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
             while True:
                 try:
                     line = f"data: {client.get(timeout=15)}\n\n"
