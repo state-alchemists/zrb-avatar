@@ -185,12 +185,17 @@ export function createCamera({ onState, page = '' } = {}) {
     const started = navigator.mediaDevices?.getUserMedia
       ? navigator.mediaDevices.getUserMedia({ video: true, audio: false })
       : Promise.reject({ name: 'NotFoundError' });
+    let stream = null;
     try {
-      const stream = await started;
-      stream.getTracks().forEach(track => track.stop());
+      stream = await started;
       error = '';
     } catch (e) {
       error = whyNot(e, '');
+    } finally {
+      // Given straight back however this ended, and whoever is still waiting for it: a stream nobody holds
+      // is a camera left filming, and a press taken back while the browser was asking is exactly when that
+      // is easy to get wrong (the review of PR #34, 2026-11-28).
+      stream?.getTracks().forEach(track => track.stop());
     }
     // A press taken back while the browser was still asking is not a camera this page offers: the answer
     // to the prompt arrives whether or not anyone is waiting for it any more.

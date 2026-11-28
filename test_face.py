@@ -1696,7 +1696,19 @@ assert ('id="talk"' in page_html and 'id="voice"' in page_html and 'id="lens"' i
 assert 'id="help"' not in page_html and "#keys.shown" not in page_html, (
     "the window still hides its own controls behind a `?`"
 )
-assert "stateLabel.textContent = statusText" in page, "the window's row never says what she is doing"
+assert "stateLabel.textContent = said" in page, "the window's row never says what she is doing"
+# And what it says comes from one place, so a state event and a status event cannot disagree. A state event
+# used to write only the page's line, which a window hides: the row stayed empty through thinking and
+# working, and changed only when a status happened to arrive (the review of PR #34, 2026-11-28).
+assert "function sayState()" in page and re.search(r"function setState\(value\) \{.*?sayState\(\);", page, re.S), (
+    "a plain state change never reaches the window's row"
+)
+assert "statusText || (state === 'idle' ? '' : state)" in page, (
+    "the row says something other than the status sentence or the state word"
+)
+assert "stateLabel.textContent = statusText" not in page, (
+    "the row is written from the status event alone again, so a state change leaves it stale"
+)
 assert 'id="buttons"' in page_html and re.search(
     r"html\.app #controls\s*\{[^}]*flex-direction:\s*column", page_html), (
     "the state and the buttons are on one line, where the state runs into the button being pressed"
@@ -1769,6 +1781,11 @@ assert "asked++;" in camera, (
 )
 assert "if (mine !== asked) return;" in camera, (
     "a press taken back while the browser was asking comes back on when the browser answers it"
+)
+# And the stream the browser hands back is given straight back in a finally, whichever way the ask ended:
+# a camera left open behind a press that was taken back is a camera still filming.
+assert "} finally {" in camera and "stream?.getTracks().forEach(track => track.stop());" in camera, (
+    "a grant that arrives after the press was taken back leaves its camera open"
 )
 # And each button carries an icon beside its word, so the row is read before it is read.
 assert page_html.count('class="icon"') == 3 and "#controls .icon" in page_html, (
@@ -1897,7 +1914,9 @@ assert "sleepAgain();" in page, "the screen is held on after the model arrived"
 # phone's working page and broken page look the same. Measured, not guessed — the first version of the
 # stall timer painted a parse failure because a cancel ends a read before a rejection can be seen.
 assert "let loading = null;" in page, "nothing keeps a load's number from being painted over"
-assert "if (!loading && !loadError) setStatusLine(state);" in page, "a state event paints over a load in flight"
+assert "if (!loading && !loadError) { setStatusLine(state); sayState(); }" in page, (
+    "a state event paints over a load in flight"
+)
 assert "if (!error && loading) return;" in page, "the camera's names paint over a load in flight"
 # And a swap that fails is not painted over either: by the time it says why, the load has already
 # cleared `loading`, so the next state event would put "idle" on the line a moment later and the page
@@ -2729,11 +2748,19 @@ assert ".catch(() => {})" not in open_post  # a dead upload is not a silence to 
 # silence ends it at once. So the page says the release in the one language the cutter reads.
 release = audio_js[audio_js.index("function releaseMic()"):audio_js.index("async function startMic()")]
 assert "const CLOSING = 1.5;" in audio_js, "the closing silence has no length"
-assert "postPcm?.(new Uint8Array(Math.round(RATE * CLOSING) * 2))" in release, (
+assert "if (wasListening) (postFinal ?? postPcm)?.(new Uint8Array(Math.round(RATE * CLOSING) * 2))" in release, (
     "a released button stops posting without saying the utterance ended, so nothing is transcribed"
 )
-assert release.index("postPcm?.") < release.index("endPost?.()"), (
+assert release.index("(postFinal ?? postPcm)?.") < release.index("endPost?.()"), (
     "the stream closes before the silence is in it"
+)
+# And the closing silence is not dropped for arriving behind speech: the block-at-a-time fallback throws a
+# block away while two are in flight, which is right for speech and wrong for the goodbye -- a release with
+# two posts still out said nothing, and the utterance ran to its half-minute timeout (PR #34, 2026-11-28).
+fallback = audio_js[audio_js.index("function postEachBlock()"):audio_js.index("function releaseMic()")]
+assert "postFinal = pcm => {" in fallback and "if (!open || sent >= AHEAD) return;" not in fallback[
+    fallback.index("postFinal = pcm => {"):], (
+    "the fallback drops the closing silence the way it drops old speech, so a release can end nothing"
 )
 
 # And chunked, which is what a page streaming its microphone sends: no length to give.

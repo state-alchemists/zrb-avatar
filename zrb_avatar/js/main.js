@@ -311,7 +311,7 @@ function setState(value) {
   if (value === 'idle' && (state === 'thinking' || state === 'tool')) her?.expression.smileSoon(); // done: a smile
   state = LOOK[value] ? value : 'idle';
   document.documentElement.style.setProperty('--glow', LOOK[state]);
-  if (!loading && !loadError) setStatusLine(state); // a load in flight, or one that failed, owns the line
+  if (!loading && !loadError) { setStatusLine(state); sayState(); } // a load in flight, or one that failed, owns the line
   followState();
 }
 
@@ -740,12 +740,21 @@ function showStatus() {
   placeSubtitle();
   subtitleEl.classList.add('on', 'status');
 }
+// What the window's row says, written from one place: the status sentence while one is up, otherwise the
+// state word, and nothing when she is idle -- a row that reads "idle" between turns is a label rather than
+// news. A state event used to write only the page's line, which a window hides, so the window's row stayed
+// empty through "thinking" and "working" and changed only when a status happened to arrive (the review of
+// PR #34, 2026-11-28). A page hides the row and keeps its line, so this is free there.
+function sayState() {
+  if (failure || loadError) return; // the line says the failure, and a state event must not paint over it
+  const said = statusText || (state === 'idle' ? '' : state);
+  if (!stateLabel || stateLabel.textContent === said) return;
+  stateLabel.textContent = said; // the window's row says it, beside her, always in sight
+  placeControls(true); // the row is wider or narrower now, and may have to move to fit
+}
 function setStatus(text) {
   statusText = typeof text === 'string' ? text.trim() : '';
-  if (stateLabel && stateLabel.textContent !== statusText) {
-    stateLabel.textContent = statusText; // the window's row says it, beside her, always in sight
-    placeControls(true); // the row is wider or narrower now, and may have to move to fit
-  }
+  sayState();
   if (sentenceUp) return;  // what she is saying wins until it goes
   if (statusText) showStatus(); else hideSubtitle();
 }
