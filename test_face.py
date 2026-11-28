@@ -1547,8 +1547,14 @@ assert "getBoundingClientRect().top" not in re.search(
 assert "innerHeight - shown.bottom" in page, (
     "the caption is placed a window's height above the top of the window"
 )
-assert "const clearRow = Math.max(0, innerHeight - rowTop) + 10;" in page, (
-    "the caption lands on the row of buttons instead of clearing it"
+# And in the window it hangs under the row of buttons rather than over it (Go, 2026-11-28): the row is
+# placed beside the model's feet, and the air the framing keeps below them is where a caption reads.
+# Where there is no room under the row it goes above it, which is where it was.
+assert "const underRow = row ? innerHeight - row.bottom - CONTROLS_GAP - height : -Infinity;" in page, (
+    "the caption lands on the row of buttons instead of hanging under it"
+)
+assert "underRow >= 4 ? underRow : aboveFoot" in page, (
+    "a caption with no room under the row is pushed off the window's bottom edge"
 )
 assert not re.search(r"html\.app #bottom\s*\{[^}]*display:\s*none", page_html), (
     "the app's own error line is hidden with the controls"

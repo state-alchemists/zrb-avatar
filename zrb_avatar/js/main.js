@@ -612,15 +612,20 @@ function placeSubtitle() {
   // `shown.bottom` counts down from the top of the window; a CSS `bottom` counts up from its bottom
   // edge, so the inset is what is left. Read the other way the line went a window's height above the
   // top and was never seen at all -- the fault that hid the caption on 2026-11-28.
-  // Three things it must clear: the edge itself, the foot stack, and the row of buttons, which now
-  // floats beside the model's feet over a canvas as tall as the window rather than under it.
+  //
+  // In the window the row of buttons is placed beside the model's feet, and the line belongs under it
+  // rather than over it (Go, 2026-11-28): the framing keeps air below the feet, and that air is where a
+  // caption reads best. Where there is not enough of it, the line goes above the row, which is where it
+  // was. On a page there is no such row: the line clears the foot stack instead.
   const inset = Math.max(0, innerHeight - shown.bottom);
   const foot = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-h')) || 0;
-  const rowTop = controlsRow?.classList.contains('placed')
-    ? controlsRow.getBoundingClientRect().top
-    : innerHeight;
-  const clearRow = Math.max(0, innerHeight - rowTop) + 10; // above the row, where there is one
-  subtitleEl.style.bottom = `${Math.round(Math.max(30 + inset, foot + 12, clearRow))}px`;
+  const row = controlsRow?.classList.contains('placed') ? controlsRow.getBoundingClientRect() : null;
+  const height = subtitleEl.offsetHeight || 0;
+  const underRow = row ? innerHeight - row.bottom - CONTROLS_GAP - height : -Infinity;
+  const aboveRow = row ? Math.max(0, innerHeight - row.top) + 10 : 0; // its place before, kept as a fallback
+  const aboveFoot = Math.max(30 + inset, foot + 12, aboveRow);
+  // Four pixels of the line's own, so a caption never sits on the window's edge.
+  subtitleEl.style.bottom = `${Math.round(Math.max(4, underRow >= 4 ? underRow : aboveFoot))}px`;
 }
 addEventListener('resize', placeSubtitle);
 // And the window's row of controls is placed against her, not against the window: a see-through window
