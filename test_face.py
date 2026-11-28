@@ -3014,6 +3014,63 @@ abandoned.close()
 # fix rather than audio to guess at.
 assert post_audio("/audio", MIC, {"X-Sample-Rate": "44100"}) == 415
 assert post_audio("/audio", MIC, {"X-Channels": "2"}) == 415
+# And the body is read before it is refused. A connection closed with its body still unread is reset
+# rather than ended, and Windows resets it under the 415: the page saw a dead server instead of the
+# rate it has to fix (Windows CI, 2026-11-28).
+refusals = server_py[server_py.index("def _take_audio"):server_py.index("def _read_exactly")]
+assert refusals.count("_drain_body") == 2, (
+    "a refused audio body is left unread, so Windows resets the connection under the 415"
+)
+assert refusals.index("_drain_body") < refusals.index("self.send_error("), (
+    "the refusal is written before the body is read, which leaves it in the socket"
+)
+# And a chunk's size is the client's to declare, so a refused chunked body is drained inside the
+# budget rather than by its declared size: a page declaring four mebibytes must not make the server
+# hold four mebibytes to refuse it (review of #37, 2026-11-28). Exactly the budget is sent, so
+# nothing is left unread when the 415 goes out.
+raw = socket.create_connection(("127.0.0.1", port), timeout=5)
+raw.sendall(
+    (
+        "POST /audio HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{port}\r\n"
+        "X-Sample-Rate: 44100\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n"
+        "400000\r\n"  # four mebibytes declared, past the drain's budget
+    ).encode()
+    + b"\x00" * server.audio.MAX_BODY_BYTES
+)
+try:
+    answered = raw.recv(200)
+except socket.timeout:  # the server is still reading the body it was asked to refuse
+    answered = b""
+assert b" 415 " in answered, (
+    "the refusal waited for the body it was refusing instead of draining inside its budget"
+)
+raw.close()
+# And a page that announces a body and then goes quiet is refused rather than waited on: the drain
+# is under a timeout, or enough quiet pages hold every thread the server has (review of #37).
+saved_drain = server.DRAIN_TIMEOUT_SECONDS
+server.DRAIN_TIMEOUT_SECONDS = 0.2
+try:
+    quiet = socket.create_connection(("127.0.0.1", port), timeout=5)
+    quiet.sendall(
+        (
+            "POST /audio HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{port}\r\n"
+            "X-Sample-Rate: 44100\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n"
+        ).encode()
+    )
+    try:
+        answered = quiet.recv(200)
+    except socket.timeout:  # the worker is still holding on for a body that never came
+        answered = b""
+    assert b" 415 " in answered, (
+        "a page that sent no body held the thread that was refusing it"
+    )
+    quiet.close()
+finally:
+    server.DRAIN_TIMEOUT_SECONDS = saved_drain
 
 # Her voice, at the rate she was made at: the page configures its AudioContext from the header.
 headers, body = listen_once(
@@ -3212,5 +3269,27 @@ try:
 finally:
     server.TRANSCRIPT_MESSAGES = saved_cap
 server._transcript.clear()
+
+# A page joins the pages that hear what comes next before its stream is opened. The headers are the
+# moment a page believes it can be told, so a turn posted in the gap between opening the stream and
+# joining went to the listeners that were already there, and the connecting page missed the words --
+# on a slow runner the test above then read the next turn instead of the one it had posted (macOS CI,
+# 2026-11-28).
+stream = server_py[server_py.index("def _stream"):server_py.index("def log_message")]
+assert stream.index("_clients.add(client)") < stream.index('"text/event-stream"'), (
+    "a page reads its stream's headers before it is one of the pages that hear a turn"
+)
+assert stream.index("try:") < stream.index('"text/event-stream"') < stream.index(
+    "except OSError"
+), (
+    "a page that goes away while its headers are written stays in the registries forever"
+)
+early = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+early.request("GET", "/events?page=early-proof")
+early.getresponse()
+assert "early-proof" in server._page_ids.values(), (
+    "a page has its stream open and is not yet one of the pages: a turn posted now is lost"
+)
+early.close()
 
 print("ok")

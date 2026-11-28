@@ -147,6 +147,10 @@ def asked_range(header: str | None, size: int) -> tuple[int, int] | None:
         return None
     return start, min(end, size - 1)
 MAX_EVENT_BYTES = 65536
+# How long a body that is being refused is worth reading before the refusal goes out anyway. A page
+# that announced a body and then went quiet would otherwise hold the thread that is refusing it, and
+# enough of those hold every thread the server has.
+DRAIN_TIMEOUT_SECONDS = 2.0
 # How many turns of the conversation the page can be shown. A session runs for hours, and a sheet that
 # grows without end costs memory on the machine and a long first paint on the phone; the newest are the
 # ones worth keeping, and an older one is still in zrb's own history.
@@ -1472,6 +1476,72 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return size
 
+    def _drain_body(self, limit: int) -> None:
+        """Read and throw away a body that is being refused, so that the refusal arrives.
+
+        A request closed with its body still in the socket's receive buffer is reset rather than
+        ended, and Windows resets it under the response -- the page then sees a dead server instead
+        of the 415 telling it to fix its rate (Windows CI, 2026-11-28). Bounded by *limit*, because
+        a page that is being refused may be sending more than is worth reading to refuse it; a body
+        past that budget is left unread, and its refusal may be reset rather than delivered, which
+        is the price of not reading it.
+
+        And under a timeout, because a page that announced a body and then went quiet must not hold
+        the thread that is refusing it: a refused request is answered, not waited on (review of #37,
+        2026-11-28).
+        """
+        saved = self.connection.gettimeout()
+        self.connection.settimeout(DRAIN_TIMEOUT_SECONDS)
+        try:
+            if (self.headers.get("Transfer-Encoding") or "").strip().lower() == "chunked":
+                self._drain_chunks(limit)
+                return
+            try:
+                size = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return
+            if size <= 0 or size > limit:
+                return
+            while size > 0:
+                block = self.rfile.read(min(size, 65536))
+                if not block:
+                    return
+                size -= len(block)
+        except TimeoutError:
+            # Half a request cannot be trusted to carry on, and the refusal is already owed.
+            self.close_connection = True
+        finally:
+            try:
+                self.connection.settimeout(saved)
+            except OSError:  # the socket is gone; there is nothing left to put back
+                pass
+
+    def _drain_chunks(self, limit: int) -> None:
+        """A chunked body thrown away, never reading more than *limit* in one piece.
+
+        A chunk's size is the client's to declare, and `_chunks` reads a declared chunk whole: a
+        refused page that declares four gigabytes would have the server hold four gigabytes to
+        refuse it. So a chunk is discarded in pieces, and the budget ends the drain wherever it
+        lands, leaving the rest unread (review of #37, 2026-11-28).
+        """
+        while limit > 0:
+            line = self.rfile.readline(64)
+            try:
+                size = int(line.split(b";")[0].strip(), 16)
+            except ValueError:
+                return
+            if size <= 0:
+                return  # the last chunk, or a page that stopped saying anything at all
+            while size > 0 and limit > 0:
+                block = self.rfile.read(min(size, 65536, limit))
+                if not block:
+                    return
+                size -= len(block)
+                limit -= len(block)
+            if size > 0:
+                return  # the budget ran out mid-chunk, and what is left is not read
+            self.rfile.read(2)  # the CRLF a chunk ends with, which is not audio
+
     def _json(self, value) -> None:
         self._send(json.dumps(value).encode(), "application/json")
 
@@ -1837,6 +1907,7 @@ class Handler(BaseHTTPRequestHandler):
         channels = (self.headers.get("X-Channels") or "").strip()
         wanted, mono = str(audio.INBOUND_RATE), str(audio.CHANNELS)
         if (rate or wanted) != wanted or (channels or mono) != mono:
+            self._drain_body(audio.MAX_BODY_BYTES)
             return self.send_error(
                 415,
                 f"audio in is {wanted} Hz mono; got {rate or '?'} Hz, "
@@ -1854,6 +1925,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             rate = 0
         if not audio.is_supported_rate(rate):
+            self._drain_body(audio.MAX_BODY_BYTES)
             return self.send_error(
                 415, "X-Sample-Rate names no rate speech can have"
             )
@@ -1985,10 +2057,6 @@ class Handler(BaseHTTPRequestHandler):
             typed.stop_reading(channel)  # zrb has stopped listening, and the box is told so
 
     def _stream(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
         client: queue.Queue = queue.Queue()
         # The page says which model it shows (/events?model=<name>), for GET /model. A page that
         # named one asked for it -- `zrb-avatar <model>` opens the window with it -- so the remembered
@@ -2011,6 +2079,18 @@ class Handler(BaseHTTPRequestHandler):
                 _showing[client] = shows
             _replay(client, chosen)
         try:
+            # The stream is opened after the page joins, not before. Headers are the moment a page
+            # believes it can be told, so a turn posted in the gap between opening the stream and
+            # joining the pages went to the listeners that were already there, and this one missed
+            # the words said while it connected. A slow machine widens that gap — macOS CI found it.
+            #
+            # Inside this `try`, because the page is a page from the line above: one that reloads in
+            # the middle of these writes has to leave the registries as surely as one that goes away
+            # later, or its queue is fed forever and its cameras are never forgotten (review of #37).
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
             while True:
                 try:
                     line = f"data: {client.get(timeout=15)}\n\n"
