@@ -514,7 +514,8 @@ addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
 // it is a page holding this device's audio session to play silence into.
 addEventListener('keydown', e => {
   if (e.key !== 'm' || e.repeat) return;
-  if (audio.listening) return audio.stop();
+  if (audio.listening || audio.hearing) return audio.stop(); // off always works, even once zrb is gone
+  if (!reach.remote || !reach.listening) return; // nothing on the other end of either stream
   audio.startEars();
   audio.startMic();
 });

@@ -1767,6 +1767,15 @@ assert "if (!reach.listening && audio.listening) audio.stopMic();" in page, (
 assert "if (!reach.remote && pageCamera.names.length) pageCamera.release();" in page, (
     "a camera grant zrb can no longer ask for is left with no way to take it back"
 )
+# The `m` key opens the microphone and the speaker as one gesture, so it follows the same rule the
+# buttons do -- while still working as an off, which must not need zrb's permission (the review of
+# #35, 2026-11-28).
+assert "if (audio.listening || audio.hearing) return audio.stop();" in page, (
+    "the m key cannot close what it opened once zrb has gone"
+)
+assert "if (!reach.remote || !reach.listening) return;" in page, (
+    "the m key opens a microphone and a speaker nothing on the other end will use"
+)
 assert "button:disabled" in page_html, "a disabled button does not look disabled"
 # And what zrb says is asked again every second rather than once at load: `/set LLM_VOICE_REMOTE_URL`
 # moves zrb's voice onto (or off) this server while the chat runs, and the page follows in the same
