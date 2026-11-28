@@ -1472,6 +1472,32 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return size
 
+    def _drain_body(self, limit: int) -> None:
+        """Read and throw away a body that is being refused, so that the refusal arrives.
+
+        A request closed with its body still in the socket's receive buffer is reset rather than
+        ended, and Windows resets it under the response -- the page then sees a dead server instead
+        of the 415 telling it to fix its rate (Windows CI, 2026-11-28). Bounded by *limit*, because
+        a page that is being refused may be sending more than is worth reading to refuse it.
+        """
+        if (self.headers.get("Transfer-Encoding") or "").strip().lower() == "chunked":
+            for block in self._chunks():
+                limit -= len(block)
+                if limit <= 0:
+                    return
+            return
+        try:
+            size = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return
+        if size <= 0 or size > limit:
+            return
+        while size > 0:
+            block = self.rfile.read(min(size, 65536))
+            if not block:
+                return
+            size -= len(block)
+
     def _json(self, value) -> None:
         self._send(json.dumps(value).encode(), "application/json")
 
@@ -1837,6 +1863,7 @@ class Handler(BaseHTTPRequestHandler):
         channels = (self.headers.get("X-Channels") or "").strip()
         wanted, mono = str(audio.INBOUND_RATE), str(audio.CHANNELS)
         if (rate or wanted) != wanted or (channels or mono) != mono:
+            self._drain_body(audio.MAX_BODY_BYTES)
             return self.send_error(
                 415,
                 f"audio in is {wanted} Hz mono; got {rate or '?'} Hz, "
@@ -1854,6 +1881,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             rate = 0
         if not audio.is_supported_rate(rate):
+            self._drain_body(audio.MAX_BODY_BYTES)
             return self.send_error(
                 415, "X-Sample-Rate names no rate speech can have"
             )
@@ -1985,10 +2013,6 @@ class Handler(BaseHTTPRequestHandler):
             typed.stop_reading(channel)  # zrb has stopped listening, and the box is told so
 
     def _stream(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
         client: queue.Queue = queue.Queue()
         # The page says which model it shows (/events?model=<name>), for GET /model. A page that
         # named one asked for it -- `zrb-avatar <model>` opens the window with it -- so the remembered
@@ -2010,6 +2034,14 @@ class Handler(BaseHTTPRequestHandler):
             if shows:
                 _showing[client] = shows
             _replay(client, chosen)
+        # The stream is opened after the page joins, not before. Headers are the moment a page
+        # believes it can be told, so a turn posted in the gap between opening the stream and
+        # joining the pages went to the listeners that were already there, and this one missed the
+        # words said while it connected. A slow machine widens that gap — macOS CI found it.
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
         try:
             while True:
                 try:

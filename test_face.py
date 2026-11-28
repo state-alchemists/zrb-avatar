@@ -3014,6 +3014,16 @@ abandoned.close()
 # fix rather than audio to guess at.
 assert post_audio("/audio", MIC, {"X-Sample-Rate": "44100"}) == 415
 assert post_audio("/audio", MIC, {"X-Channels": "2"}) == 415
+# And the body is read before it is refused. A connection closed with its body still unread is reset
+# rather than ended, and Windows resets it under the 415: the page saw a dead server instead of the
+# rate it has to fix (Windows CI, 2026-11-28).
+refusals = server_py[server_py.index("def _take_audio"):server_py.index("def _read_exactly")]
+assert refusals.count("_drain_body") == 2, (
+    "a refused audio body is left unread, so Windows resets the connection under the 415"
+)
+assert refusals.index("_drain_body") < refusals.index("self.send_error("), (
+    "the refusal is written before the body is read, which leaves it in the socket"
+)
 
 # Her voice, at the rate she was made at: the page configures its AudioContext from the header.
 headers, body = listen_once(
@@ -3212,5 +3222,22 @@ try:
 finally:
     server.TRANSCRIPT_MESSAGES = saved_cap
 server._transcript.clear()
+
+# A page joins the pages that hear what comes next before its stream is opened. The headers are the
+# moment a page believes it can be told, so a turn posted in the gap between opening the stream and
+# joining went to the listeners that were already there, and the connecting page missed the words --
+# on a slow runner the test above then read the next turn instead of the one it had posted (macOS CI,
+# 2026-11-28).
+stream = server_py[server_py.index("def _stream"):server_py.index("def log_message")]
+assert stream.index("_clients.add(client)") < stream.index('"text/event-stream"'), (
+    "a page reads its stream's headers before it is one of the pages that hear a turn"
+)
+early = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+early.request("GET", "/events?page=early-proof")
+early.getresponse()
+assert "early-proof" in server._page_ids.values(), (
+    "a page has its stream open and is not yet one of the pages: a turn posted now is lost"
+)
+early.close()
 
 print("ok")
