@@ -1784,6 +1784,9 @@ tools = (server.HERE / "zrb_init.py").read_text()
 assert "def voice_is_here() -> bool:" in tools and "get_remote_url()" in tools, (
     "the plugin never asks where zrb's voice is, so a page cannot be told"
 )
+assert "zrb.llm.util.face_server import get_remote_url" in tools, (
+    "an older zrb's layout is read as 'no remote voice', so the page turns its own switches off"
+)
 assert 'send, {"type": "voice", "remote": voice}' in tools, (
     "the plugin never tells the page that zrb's voice moved"
 )

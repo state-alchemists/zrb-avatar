@@ -210,6 +210,24 @@ def _where(url: str) -> tuple[str, int]:
     return ("loopback" if host in LOOPBACK_HOSTS else host, port)
 
 
+def _remote_url() -> "str | None":
+    """zrb's `get_remote_url`, whichever layout of zrb is loaded.
+
+    4.0 moved the face server's contract under `zrb.llm.contracts.util`; before that it sat at the top
+    of `zrb.llm`, as every other unit above did. This plugin declares no minimum zrb, so both are
+    read. A zrb from before there was a remote voice has neither, and answers as an empty setting
+    does: there is nothing to point at.
+    """
+    try:
+        from zrb.llm.contracts.util.face_server import get_remote_url
+    except ImportError:  # zrb < 4.0 keeps the face server's contract at the top of zrb.llm
+        try:
+            from zrb.llm.util.face_server import get_remote_url
+        except ImportError:  # a zrb from before the page could carry the voice
+            return None
+    return get_remote_url()
+
+
 def voice_is_here() -> bool:
     """Whether zrb's voice is this page's: `LLM_VOICE_REMOTE_URL` set, and naming this server.
 
@@ -219,14 +237,9 @@ def voice_is_here() -> bool:
     breath, instead of waiting for a restart.
 
     A URL naming another machine is not this page: that server carries the microphone and the
-    speaker, and this page's camera is a camera nobody asks for. A zrb from before the setting
-    existed answers the same as an empty one.
+    speaker, and this page's camera is a camera nobody asks for.
     """
-    try:
-        from zrb.llm.contracts.util.face_server import get_remote_url
-    except ImportError:  # a zrb from before the page could carry the voice
-        return False
-    remote = get_remote_url()
+    remote = _remote_url()
     return bool(remote) and _where(remote) == _where(AVATAR_URL)
 
 
