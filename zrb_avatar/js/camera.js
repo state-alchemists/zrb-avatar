@@ -162,20 +162,27 @@ export function createCamera({ onState, page = '' } = {}) {
 
   // The answer to one ask from zrb, by the id it asked with. A photo also means the browser has now
   // labelled this page's cameras, so they are published: the next ask can name the one just used.
+  const CAMERA_OFF = { refusal: 'this page has its camera off' };
   async function answer(id, device) {
+    const mine = asked;
     // A press taken back between the ask and the photo is a photo not taken: the camera is off by the time
-    // this runs, and opening one for a request that arrived while it was on is the one way "off" would not
-    // mean off. The refusal is answered rather than dropped, so the ask ends with words instead of nothing.
-    const result = names.length ? await shoot(device) : { refusal: 'this page has its camera off' };
+    // this runs, and opening one for a request that arrived while it was on is the one way "off" would not mean
+    // off. The refusal is answered rather than dropped, so the ask ends with words instead of nothing.
+    const result = names.length ? await shoot(device) : CAMERA_OFF;
+    // And a press that lands while the picture is being taken still takes it back: the photo is not sent and
+    // the camera is not published again. An answer that undid the off button would be no switch at all
+    // (review of PR #34, 2026-11-28). The camera the shot opened is still closed by `shoot`'s own finally --
+    // a getUserMedia already on its way cannot be called back, only not used.
+    const ended = mine === asked ? result : CAMERA_OFF;
     try {
       await fetch(`frame?id=${encodeURIComponent(id)}`, {
         method: 'POST',
-        body: JSON.stringify(result),
+        body: JSON.stringify(ended),
       });
     } catch {
       return; // the ask is over either way; a page that cannot answer is a missing photo
     }
-    if (result.image) publish();
+    if (ended.image) publish();
   }
 
   // The key: ask for a camera and give it straight back, so the browser's question is asked once,

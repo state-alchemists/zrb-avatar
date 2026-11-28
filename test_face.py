@@ -1766,8 +1766,17 @@ assert "async function release()" in camera and "await report([])" in camera, (
 assert "names = found.filter(device => device.label).map(device => device.label);" in camera, (
     "the camera button is on because a camera exists, not because the page may use one"
 )
-assert "names.length ? await shoot(device) : { refusal: 'this page has its camera off' }" in camera, (
+assert "names.length ? await shoot(device) : CAMERA_OFF" in camera, (
     "a photo asked for before the camera was switched off is still taken after it"
+)
+# And a press that lands while the picture is being taken takes it back too: the photo is not sent, and the
+# camera is not published again by the answer -- an off button a finished photo could undo is not a switch
+# (the review of PR #34, 2026-11-28).
+assert "const mine = asked;" in camera and "mine === asked ? result : CAMERA_OFF" in camera, (
+    "a photo in flight when the camera is switched off is still sent, and the camera comes back on with it"
+)
+assert "if (ended.image) publish();" in camera, (
+    "the photo's answer publishes the camera it no longer has"
 )
 # And the reports go one at a time: the server keeps the last one it receives, so an empty report that
 # overtook the names behind it took the camera away while the button read "camera on". The review of PR
