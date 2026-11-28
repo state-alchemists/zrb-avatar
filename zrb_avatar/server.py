@@ -291,6 +291,13 @@ _frames: dict[str, dict] = (
 # camera can only answer that it has none, and its refusal must not answer for everyone.
 _cameras: dict[str, list[str]] = {}
 _cameras_lock = threading.Lock()
+# What zrb can do with the page it is looking at, as zrb says so itself. `remote` comes from
+# zrb-avatar's zrb side ({"type": "voice", "remote": bool}): only zrb knows its own config, and `/set`
+# can move its voice onto this server or off it while the chat runs. `listening` is this server's own
+# knowledge -- a reader on the microphone route (`audio.is_microphone_being_read`) -- so it needs no
+# word from zrb and cannot go stale. `said` is the last thing the pages were told, so each change
+# reaches them once; the two values themselves are the answer a connecting page gets.
+_voice: dict = {"remote": False, "said": None}
 # Which page each event stream is, by the id that page gave at /events?page=<id>. Held with the pages
 # themselves, because it is discarded with them.
 _page_ids: dict[queue.Queue, str] = {}
@@ -1217,6 +1224,35 @@ def broadcast(message: str) -> None:
         _send_all(message)
 
 
+def voice_state() -> dict:
+    """What zrb can do with a page: speak through it, and hear it.
+
+    `remote` is read without a lock because it is a bool and `_replay` is called with `_lock` held:
+    a page that connects while zrb's voice is elsewhere should say so in the same breath as its
+    model, not a second later.
+    """
+    return {
+        "type": "voice",
+        "remote": bool(_voice["remote"]),
+        "listening": audio.is_microphone_being_read(),
+    }
+
+
+def _tell_pages_voice() -> None:
+    """Tell every page what zrb can do with it, when that has changed.
+
+    Called on both moments it can change: zrb saying its voice moved onto this server or off it, and
+    zrb's reader arriving on the microphone route or leaving it again. A page that is told twice the
+    same thing would be a page that redraws its buttons for nothing, so only a change is sent.
+    """
+    said = voice_state()
+    with _lock:
+        if said == _voice["said"]:
+            return
+        _voice["said"] = said
+        _send_all(json.dumps(said))
+
+
 def _accepts_view(event: dict) -> bool:
     """Whether this view is newer than the one applied last, so a late older one decides nothing.
 
@@ -1285,6 +1321,12 @@ def _replay(client: queue.Queue, chosen: str | None) -> None:
     ):
         if message:
             client.put(json.dumps(message))
+    # Only when there is something to reach: a page assumes nothing can, so with zrb's voice
+    # elsewhere there is nothing to say — the same rule as the switches above. A page that connects
+    # after it moved here is told, so its first frame is not three buttons that do nothing.
+    voice = voice_state()
+    if voice["remote"] or voice["listening"]:
+        client.put(json.dumps(voice))
     # Only when she has moved a switch away from its default: a page assumes the defaults, so when
     # that is the truth there is nothing to tell it. The caller holds the lock, so this is the
     # dict, not a fresh read.
@@ -1579,6 +1621,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if (
+            isinstance(event, dict) and event.get("type") == "voice"
+        ):  # zrb: whether its voice is this server's
+            _voice["remote"] = bool(event.get("remote"))
+            _tell_pages_voice()
+            self.send_response(204)
+            self.end_headers()
+            return
         message = json.dumps(
             event
         )  # re-dumped so it is one line, as an SSE data field must be
@@ -1808,16 +1858,25 @@ class Handler(BaseHTTPRequestHandler):
         One reader at a time is the point: two would halve the audio between them and neither
         would transcribe a sentence. Taking the channel first is what makes this reader the one —
         a reader that has gone is replaced here rather than left holding the next block.
+
+        Arriving and leaving are also what tells the pages whether a press on their microphone would
+        be heard: this is the moment zrb starts reading, and the end of the route is the moment it
+        stops. A page offers the button on that, and no word from zrb has to say it.
         """
         channel = audio.start_reading("in")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Sample-Rate", str(audio.INBOUND_RATE))
-        self.send_header("X-Sample-Width", str(audio.SAMPLE_WIDTH))
-        self.send_header("X-Channels", str(audio.CHANNELS))
-        self.end_headers()
-        self._write_frames(channel, audio.INBOUND_RATE)
+        _tell_pages_voice()  # zrb is reading: a page's microphone now has somewhere to go
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Sample-Rate", str(audio.INBOUND_RATE))
+            self.send_header("X-Sample-Width", str(audio.SAMPLE_WIDTH))
+            self.send_header("X-Channels", str(audio.CHANNELS))
+            self.end_headers()
+            self._write_frames(channel, audio.INBOUND_RATE)
+        finally:
+            audio.end_reading("in")
+            _tell_pages_voice()  # whatever ended the route, nothing is reading now
 
     def _relay_speech_to_page(self):
         """What zrb said, as one long response of raw frames, at the rate the headers name.

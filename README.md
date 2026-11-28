@@ -580,10 +580,10 @@ first. A name only one page reports is offered exactly as it was.
 
 ### Which half lives where
 
-This repository is the page and the routes it speaks: `zrb_avatar/server.py:1303` hands `/audio/in`
-to zrb's dictation, `server.py:1454` takes `/say` from its speech player, `server.py:1456` takes
-`/text` from the page's text box, `server.py:1307` hands the typed lines on at `/text/in`, and
-`server.py:1321` and `server.py:1323` answer `/frame` and `/frame/devices` for a camera on the page.
+This repository is the page and the routes it speaks: `zrb_avatar/server.py:1380` hands `/audio/in`
+to zrb's dictation, `server.py:1556` takes `/say` from its speech player, `server.py:1558` takes
+`/text` from the page's text box, `server.py:1384` hands the typed lines on at `/text/in`, and
+`server.py:1400` and `server.py:1565` answer `/frame/devices` and `/frame` for a camera on the page.
 The browser end of those is `zrb_avatar/js/audio.js`, `zrb_avatar/js/camera.js` and
 `zrb_avatar/js/typed.js`.
 
@@ -593,18 +593,37 @@ line, rather than accepting it into a queue nobody will drain. That is the diffe
 message that is waiting and one that never had anywhere to go.
 
 Honouring `ZRB_LLM_VOICE_REMOTE_URL` is zrb's, and nothing here repeats that decision. zrb reads it
-at `src/zrb/llm/util/face_server.py:46`, and three places act on it:
+at `src/zrb/llm/contracts/util/face_server.py:57`, and three places act on it:
 
-- `src/zrb/llm/dictation/microphone.py:127` — `open_microphone` returns the page's microphone before
-  any stream of this machine's is opened.
-- `src/zrb/llm/speech/pcm_player.py:578` — the player's output stream is the page's speaker, so the
-  PCM a speech backend renders is posted to `/say`. Which stream to open is the player's, and a
-  speech backend here returns its audio and nothing else.
-- `src/zrb/llm/camera/backend/builtin.py:28` — `get_camera_backend("auto", …)` is given the page's
-  cameras beside this machine's.
+- `src/zrb/llm/presentation/dictation/microphone.py:127` — `open_microphone` returns the page's
+  microphone before any stream of this machine's is opened.
+- `src/zrb/llm/presentation/speech/pcm_player.py:335` — the player's output stream is the page's
+  speaker, so the PCM a speech backend renders is posted to `/say`. Which stream to open is the
+  player's, and a speech backend here returns its audio and nothing else.
+- `src/zrb/llm/presentation/camera/backend/builtin.py:56` — `get_camera_backend("auto", …)` is given
+  the page's cameras beside this machine's.
+
+### What the page can do, and how it knows
+
+The page's three buttons are only worth pressing while zrb is on the other end of them, so it is told.
+`{"type": "voice", "remote": bool, "listening": bool}` reaches every open page whenever either half
+changes, and a page that connects later is told the same thing.
+
+| half | who knows it | when it changes |
+| --- | --- | --- |
+| `remote` | zrb, alone: its `ZRB_LLM_VOICE_REMOTE_URL` set and naming this server | `zrb_init.py` asks again every second, so `/set LLM_VOICE_REMOTE_URL http://127.0.0.1:7777` moves the page's voice onto it, and clearing it moves the voice away, without a restart |
+| `listening` | this server: a reader is attached to `/audio/in` | the moment zrb's dictation opens the route or the route ends — hands-free holds it open, zrb's own push-to-talk holds it between its two presses, and with neither nothing reads it |
+
+The talk button offers a press only while `listening`, and the speaker and camera buttons only while
+`remote` — a camera zrb cannot ask for is a grant with nothing behind it, since `/frame` goes to the
+server its voice names. A disabled button keeps its place in the row and says why in its own label
+("zrb can't hear you", "zrb isn't listening") rather than disappearing. Two consequences worth
+knowing: the page cannot start zrb listening by itself — that is `/handsfree` in the chat, or zrb's own
+push-to-talk — and a reader that has just gone is noticed at the next silence frame, so `listening`
+can be up to fifteen seconds late turning off.
 
 A capture that names no device is this machine's camera even so — the presence photo at
-`zrb_init.py:481` is taken that way — and only a named one is asked of the page, as in
+`zrb_init.py:504` is taken that way — and only a named one is asked of the page, as in
 `/photo back camera`. `src/zrb/llm/camera/backend/auto.py:23` is where that rule is written.
 
 ### zrb settings it depends on

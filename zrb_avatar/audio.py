@@ -152,6 +152,10 @@ _channels_lock = threading.Lock()
 # The rate the last sentence was made at, and the lock that makes reading and writing it one step.
 # None until zrb's speech has said something on this run.
 _outbound_format: dict[str, int | None] = {"rate": None}
+# How many requests hold the microphone route, so a page can be told whether a press would be heard.
+# Counted rather than kept as one flag because a replaced reader ends after the one that replaced it
+# has already started, and its end must not say nobody is listening.
+_microphone_readers = 0
 
 
 def start_reading(direction: str) -> Channel:
@@ -163,8 +167,33 @@ def start_reading(direction: str) -> Channel:
     whichever channel is current, so a reader that was replaced has nothing left to take and ends on
     its own timeout.
     """
+    global _microphone_readers
     with _channels_lock:
+        if direction == "in":
+            _microphone_readers += 1
         return _swap_channel(direction)
+
+
+def end_reading(direction: str) -> None:
+    """One request has stopped holding *direction*.
+
+    Called however the request ended, so a route that failed says so as plainly as one that closed.
+    """
+    global _microphone_readers
+    with _channels_lock:
+        if direction == "in" and _microphone_readers > 0:
+            _microphone_readers -= 1
+
+
+def is_microphone_being_read() -> bool:
+    """Whether anything is reading the page's microphone, so a press on it would be heard.
+
+    This is the whole of "zrb is listening", and it says nothing about how zrb came to be listening:
+    a session in hands-free holds the route open for as long as it is on, and zrb's own push-to-talk
+    holds it between its two presses. Either way a page's words reach it.
+    """
+    with _channels_lock:
+        return _microphone_readers > 0
 
 
 def start_reading_outbound() -> tuple["Channel", int]:

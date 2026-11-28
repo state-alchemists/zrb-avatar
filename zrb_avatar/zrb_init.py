@@ -55,6 +55,7 @@ import datetime
 import os
 import sys
 import time
+import urllib.parse
 
 from zrb import CFG
 from zrb.builtin import llm_chat
@@ -114,7 +115,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # bootstrap key); passing it on is what keeps the two spellings of a setting the same one
 # for anything this process starts, `zrb-avatar` included.
 os.environ.setdefault("_ZRB_ENV_PREFIX", CFG.ENV_PREFIX)
-from zrb_avatar.client import ask, face_hooks, send, snapshot, with_mouth  # noqa: E402
+from zrb_avatar.client import (  # noqa: E402
+    AVATAR_URL,
+    ask,
+    face_hooks,
+    send,
+    snapshot,
+    with_mouth,
+)
 from zrb_avatar.idle import LastInput  # noqa: E402
 from zrb_avatar.server import clips, playable, short_name  # noqa: E402
 
@@ -157,6 +165,9 @@ PRESENCE_SECONDS = float(_setting("PRESENCE_SECONDS", "300"))
 # Away at least this long before "you are back" is worth saying at all.
 BACK_SECONDS = 300
 MODEL_SECONDS = float(_setting("MODEL_SECONDS", "5"))
+# The names of one machine, as far as two URLs can be compared: `localhost:7777` and
+# `127.0.0.1:7777` are the same server, and a setting written either way must not read as another.
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"}
 SIDES = {
     "front": "the front",
     "behind": "behind",
@@ -189,6 +200,34 @@ _face: dict = {
     "model": None,  # the avatar the window shows
     "music": False,  # whether something is playing, so she dances
 }
+
+
+def _where(url: str) -> tuple[str, int]:
+    """The machine *url* names, as a host and a port."""
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").strip("[]").lower()
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    return ("loopback" if host in LOOPBACK_HOSTS else host, port)
+
+
+def voice_is_here() -> bool:
+    """Whether zrb's voice is this page's: `LLM_VOICE_REMOTE_URL` set, and naming this server.
+
+    Asked again on every tick rather than answered once at load, because zrb reads that setting
+    afresh each time it needs a voice, and `/set LLM_VOICE_REMOTE_URL` moves the microphone and the
+    speaker onto (or off) this server while the chat runs. The page's buttons follow in the same
+    breath, instead of waiting for a restart.
+
+    A URL naming another machine is not this page: that server carries the microphone and the
+    speaker, and this page's camera is a camera nobody asks for. A zrb from before the setting
+    existed answers the same as an empty one.
+    """
+    try:
+        from zrb.llm.contracts.util.face_server import get_remote_url
+    except ImportError:  # a zrb from before the page could carry the voice
+        return False
+    remote = get_remote_url()
+    return bool(remote) and _where(remote) == _where(AVATAR_URL)
 
 
 class QuietSpeech(AnySpeechBackend):
@@ -467,9 +506,17 @@ async def _sense_loop(turns: asyncio.Queue, watcher: LastInput | None) -> None:
         else None
     )
     next_model = next_presence = time.monotonic()
+    said_voice = None  # nothing told yet: the first tick tells the pages where zrb's voice is
     while True:
         await asyncio.sleep(1)
         now = time.monotonic()
+        # `remote` is what only zrb knows, and `/set` can change it while this loop runs. Saying it
+        # again on every change is what lets a page stop offering a microphone nothing reads, or
+        # start, without a restart.
+        voice = voice_is_here()
+        if voice != said_voice:
+            said_voice = voice
+            await asyncio.to_thread(send, {"type": "voice", "remote": voice})
         view = await asyncio.to_thread(ask, "view")
         if view and view.get("n") != seen:
             seen = view.get("n")

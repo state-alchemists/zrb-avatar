@@ -1735,6 +1735,47 @@ assert "owned = !audio.listening;" in page and "if (owned) audio.stopMic();" in 
 assert "pageCamera.names.length ? pageCamera.release() : pageCamera.ask()" in page, (
     "the camera button asks and never takes the names back"
 )
+# Whether a press would be heard is not something a page can guess, so zrb says it: its voice reaches
+# the page as an event (`voice`), whose `listening` is the server's own knowledge of a reader on the
+# microphone route. The talk button offers a press only while one would be heard, and the two switches
+# beside it only while zrb's voice is this server's — a button that is always there is a button that
+# looks broken when hands-free is off (Go, 2026-11-28).
+assert "msg.type === 'voice'" in page and (
+    "reach = { remote: !!msg.remote, listening: !!msg.listening };" in page
+), "the page never learns whether zrb can hear it"
+assert "talkButton.disabled = !reach.listening;" in page, (
+    "the talk button offers a press that nothing is reading the microphone for"
+)
+assert "voiceButton.disabled = !reach.remote;" in page and "lensButton.disabled = !reach.remote;" in page, (
+    "a switch zrb cannot reach is offered as though it did something"
+)
+assert "function paintButtons()" in page and "onState: now => {" in page, (
+    "the row is painted from more than one place, so one switch undoes what another said"
+)
+assert "zrb can't hear you" in page and "zrb isn't listening" in page, (
+    "a disabled button says nothing about why it is disabled"
+)
+assert "button:disabled" in page_html, "a disabled button does not look disabled"
+# And what zrb says is asked again every second rather than once at load: `/set LLM_VOICE_REMOTE_URL`
+# moves zrb's voice onto (or off) this server while the chat runs, and the page follows in the same
+# breath instead of waiting for a restart.
+tools = (server.HERE / "zrb_init.py").read_text()
+assert "def voice_is_here() -> bool:" in tools and "get_remote_url()" in tools, (
+    "the plugin never asks where zrb's voice is, so a page cannot be told"
+)
+assert 'send, {"type": "voice", "remote": voice}' in tools, (
+    "the plugin never tells the page that zrb's voice moved"
+)
+assert "said_voice = None" in tools and "if voice != said_voice:" in tools, (
+    "the voice is read once rather than followed, so `/set` leaves the page stale"
+)
+server_py = (server.HERE / "server.py").read_text()
+assert "def voice_state() -> dict:" in server_py and 'event.get("type") == "voice"' in server_py, (
+    "the server neither holds what zrb said nor takes its word for it"
+)
+assert "audio.is_microphone_being_read()" in server_py and (
+    "audio.end_reading(\"in\")" in server_py
+), "the server never notices zrb arriving on the microphone route or leaving it"
 camera = (server.HERE / "js" / "camera.js").read_text()
 assert "async function release()" in camera and "await report([])" in camera, (
     "there is no way to tell the server this page is no longer a camera"
@@ -2696,6 +2737,65 @@ def post_audio(path: str, body, headers: dict, chunked: bool = False) -> int:
     response.read()
     connection.close()
     return response.status
+
+
+# Whether zrb can hear this page is a fact this server knows by itself: a reader on the microphone
+# route is the whole of "listening" (see `_relay_audio_to_zrb`). So a page can be told without a word
+# from zrb, and told the moment it changes, which is what lets the talk button offer a press only
+# while one would be heard. With hands-free off zrb's dictation holds no reader, and a press on the
+# page's microphone went into a queue nobody drained — Go asked on 2026-11-28 why the button did
+# nothing there. Nothing has read the route yet at this point, so the count starts at zero.
+voice_ping = server.audio.PING_SECONDS
+server.audio.PING_SECONDS = 0.05  # a route that ended is noticed inside this test
+try:
+    assert server.audio.is_microphone_being_read() is False, "something is already reading"
+
+
+    def voice_event(events) -> dict:
+        while (event := next_event(events))["type"] != "voice":
+            pass  # what a connecting page is replayed first: the music, the model, the pose
+        return event
+
+
+    watcher = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    watcher.request("GET", "/events")
+    watched_voice = watcher.getresponse()
+    time.sleep(0.2)
+    assert post_event('{"type":"voice","remote":true}') == 204, "zrb cannot say where its voice is"
+    assert voice_event(watched_voice) == {
+        "type": "voice",
+        "remote": True,
+        "listening": False,
+    }, "a page is not told that zrb's voice has moved onto this server"
+    reader = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    reader.request("GET", "/audio/in")
+    held = reader.getresponse()  # held: a response nobody keeps is a socket that closes
+    time.sleep(0.2)
+    assert voice_event(watched_voice)["listening"] is True, (
+        "a page is not told that zrb started reading its microphone, so its button stays off"
+    )
+    # A replaced reader ends after the one that replaced it: its end must not say nobody is reading.
+    second = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    second.request("GET", "/audio/in")
+    replaced = second.getresponse()
+    time.sleep(0.2)
+    reader.close()
+    time.sleep(0.2)
+    assert server.audio.is_microphone_being_read() is True, (
+        "the reader that was replaced took the count of the one reading with it"
+    )
+    second.close()
+    del replaced
+    time.sleep(0.2)
+    assert voice_event(watched_voice)["listening"] is False, (
+        "a page is not told that zrb stopped reading, so it offers a press nothing hears"
+    )
+    # Back to what the rest of this file assumes: a page connecting now is replayed nothing about zrb.
+    assert post_event('{"type":"voice","remote":false}') == 204
+    assert voice_event(watched_voice)["remote"] is False
+    watcher.close()
+finally:
+    server.audio.PING_SECONDS = voice_ping
 
 
 def listen_once(path: str, size: int, send) -> tuple[dict, bytes]:
