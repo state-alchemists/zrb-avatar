@@ -1244,9 +1244,13 @@ def _tell_pages_voice() -> None:
     Called on both moments it can change: zrb saying its voice moved onto this server or off it, and
     zrb's reader arriving on the microphone route or leaving it again. A page that is told twice the
     same thing would be a page that redraws its buttons for nothing, so only a change is sent.
+
+    The state is read inside the lock the send is made under, so a reader ending and its replacement
+    starting cannot publish in the wrong order: whichever call gets the lock last reads the count as
+    it is then, and the page is left holding the newer answer rather than the older one.
     """
-    said = voice_state()
     with _lock:
+        said = voice_state()
         if said == _voice["said"]:
             return
         _voice["said"] = said

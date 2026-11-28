@@ -1800,6 +1800,9 @@ assert "def voice_state() -> dict:" in server_py and 'event.get("type") == "voic
 assert "audio.is_microphone_being_read()" in server_py and (
     "audio.end_reading(\"in\")" in server_py
 ), "the server never notices zrb arriving on the microphone route or leaving it"
+assert "with _lock:\n        said = voice_state()" in server_py, (
+    "what is sent is read before the lock that sends it, so a reader's end can land after its replacement's start"
+)
 camera = (server.HERE / "js" / "camera.js").read_text()
 assert "async function release()" in camera and "await report([])" in camera, (
     "there is no way to tell the server this page is no longer a camera"
