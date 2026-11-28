@@ -1629,8 +1629,17 @@ if TYPED_PATH is not None:
         "the page's text box reaches a route nobody answers"
     )
 # Typing a letter is not pressing a key: an `m` in a sentence must not start the microphone, and a `c`
-# must not ask for the camera. The box's own keys are stopped before the page's key handlers run.
-assert "closest('input, textarea')" in page, "a letter typed in the box also presses a key"
+# must not ask for the camera. The box's own keys are stopped before the page's key handlers run -- except
+# Enter, which is how the box sends: a textarea does not submit a form, so stopping Enter here left a
+# phone that typed a message and sent nothing (review of PR #34, 2026-11-28).
+capture = page[page.index("addEventListener('keydown', e => {"):]
+capture = capture[:capture.index("}, true);")]
+assert "target.closest('input, textarea')" in capture, "a letter typed in the box also presses a key"
+assert "if (e.key === 'Enter') return;" in capture and (
+    capture.index("e.key === 'Enter'") < capture.index("e.stopImmediatePropagation()")), (
+    "the box's Enter is stopped before the handler that sends the line can see it"
+)
+assert "input.addEventListener('keydown'" in typed_js, "the box has no Enter of its own to send with"
 assert "interactive-widget=resizes-content" in page_html, (
     "the phone's own keyboard covers the box that was tapped"
 )

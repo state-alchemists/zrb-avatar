@@ -488,9 +488,15 @@ try {
 // Typing a key is not pressing it: the text box takes its own keys, so a message with an `m` in it
 // does not also start the microphone, and one with a `c` does not ask for the camera. Registered
 // first, and in the capture phase, so it runs before the listeners below rather than after them.
+//
+// Enter is the exception, and it is the box's own key: a textarea does not submit a form on Enter, so the
+// only thing that can send a typed line is the box's own handler -- and stopping the key here killed that
+// handler, leaving a phone that types a message and sends nothing (review of PR #34, 2026-11-28).
 addEventListener('keydown', e => {
   const target = e.target;
-  if (target instanceof Element && target.closest('input, textarea')) e.stopImmediatePropagation();
+  if (!(target instanceof Element) || !target.closest('input, textarea')) return;
+  if (e.key === 'Enter') return; // Enter sends, and Shift+Enter is the box's own newline
+  e.stopImmediatePropagation();
 }, true);
 addEventListener('keydown', e => { her.framing.onKey(e); her.view.notice(); });
 // M is the microphone, and with it her voice out of the speaker: one gesture is what a browser asks
