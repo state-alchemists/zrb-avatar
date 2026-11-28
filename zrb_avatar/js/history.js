@@ -27,13 +27,42 @@ function toTheEnd() {
   newer.hidden = true;
 }
 
+// A picture in a reply is fetched the moment it is painted, and that request tells whatever host it names
+// that this page is open -- the viewer's address with it. So nothing here is fetched from a stranger: an
+// image that is not already in the message (`data:`) becomes a link the reader may open on purpose, and a
+// link carries no referrer either.
+const ABSOLUTE = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
+
+function reachNothingRemote(container) {
+  for (const image of container.querySelectorAll('img')) {
+    const source = image.getAttribute('src') || '';
+    if (source.startsWith('data:')) {
+      image.setAttribute('referrerpolicy', 'no-referrer');
+    } else if (ABSOLUTE.test(source)) {
+      const link = document.createElement('a');
+      link.href = source;
+      link.rel = 'noopener noreferrer';
+      link.textContent = image.getAttribute('alt') || 'a picture, not loaded';
+      image.replaceWith(link);
+    }
+  }
+  for (const link of container.querySelectorAll('a')) {
+    link.rel = 'noopener noreferrer';
+  }
+}
+
 // Markdown, rendered by the pair zrb's own page uses. A renderer that did not load is not a page with no
 // conversation: the words stand as they were written rather than vanishing.
 function render(text) {
   const marked = globalThis.marked;
   const purify = globalThis.DOMPurify;
   if (marked && purify) {
-    return purify.sanitize(marked.parse(text, { gfm: true, breaks: true, async: false }));
+    const clean = document.createElement('template');
+    clean.innerHTML = purify.sanitize(
+      marked.parse(text, { gfm: true, breaks: true, async: false })
+    );
+    reachNothingRemote(clean.content);
+    return clean.innerHTML;
   }
   const escaped = text.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
   return `<p>${escaped}</p>`;

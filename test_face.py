@@ -1636,11 +1636,20 @@ assert "showHistory" in page and "addTurn" in page, (
     "a turn that arrives on the page is never painted"
 )
 history_js = (server.HERE / "js" / "history.js").read_text()
-assert "purify.sanitize(marked.parse(" in history_js, (
+assert "purify.sanitize(" in history_js and "marked.parse(text, { gfm: true, breaks: true, async: false })" in history_js, (
     "markdown from the model is put on the page without being sanitized first"
 )
 assert "if (marked && purify)" in history_js and "return `<p>${escaped}</p>`" in history_js, (
     "a renderer that did not load leaves the conversation blank rather than plain"
+)
+# And the page fetches nothing from a stranger: a picture in a reply would otherwise be requested the moment
+# the sheet paints it, telling that host this page is open. Only an image already in the message is drawn;
+# any other becomes a link the reader opens on purpose (review of PR #36, 2026-11-28).
+assert "reachNothingRemote" in history_js and "image.replaceWith(link)" in history_js, (
+    "a picture in a reply is fetched from its host as soon as the sheet paints it"
+)
+assert "link.rel = 'noopener noreferrer'" in history_js, (
+    "a link in a reply tells its host where the reader came from"
 )
 code_lines = "\n".join(line for line in page.splitlines() if not line.strip().startswith("//"))
 for phrase in ("drawing her", "loading her animations", "can't draw her", "can't load her"):
