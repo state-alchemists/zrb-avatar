@@ -147,6 +147,10 @@ def asked_range(header: str | None, size: int) -> tuple[int, int] | None:
         return None
     return start, min(end, size - 1)
 MAX_EVENT_BYTES = 65536
+# How long a body that is being refused is worth reading before the refusal goes out anyway. A page
+# that announced a body and then went quiet would otherwise hold the thread that is refusing it, and
+# enough of those hold every thread the server has.
+DRAIN_TIMEOUT_SECONDS = 2.0
 # How many turns of the conversation the page can be shown. A session runs for hours, and a sheet that
 # grows without end costs memory on the machine and a long first paint on the phone; the newest are the
 # ones worth keeping, and an older one is still in zrb's own history.
@@ -1481,21 +1485,36 @@ class Handler(BaseHTTPRequestHandler):
         a page that is being refused may be sending more than is worth reading to refuse it; a body
         past that budget is left unread, and its refusal may be reset rather than delivered, which
         is the price of not reading it.
+
+        And under a timeout, because a page that announced a body and then went quiet must not hold
+        the thread that is refusing it: a refused request is answered, not waited on (review of #37,
+        2026-11-28).
         """
-        if (self.headers.get("Transfer-Encoding") or "").strip().lower() == "chunked":
-            self._drain_chunks(limit)
-            return
+        saved = self.connection.gettimeout()
+        self.connection.settimeout(DRAIN_TIMEOUT_SECONDS)
         try:
-            size = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            return
-        if size <= 0 or size > limit:
-            return
-        while size > 0:
-            block = self.rfile.read(min(size, 65536))
-            if not block:
+            if (self.headers.get("Transfer-Encoding") or "").strip().lower() == "chunked":
+                self._drain_chunks(limit)
                 return
-            size -= len(block)
+            try:
+                size = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return
+            if size <= 0 or size > limit:
+                return
+            while size > 0:
+                block = self.rfile.read(min(size, 65536))
+                if not block:
+                    return
+                size -= len(block)
+        except TimeoutError:
+            # Half a request cannot be trusted to carry on, and the refusal is already owed.
+            self.close_connection = True
+        finally:
+            try:
+                self.connection.settimeout(saved)
+            except OSError:  # the socket is gone; there is nothing left to put back
+                pass
 
     def _drain_chunks(self, limit: int) -> None:
         """A chunked body thrown away, never reading more than *limit* in one piece.

@@ -3047,6 +3047,30 @@ assert b" 415 " in answered, (
     "the refusal waited for the body it was refusing instead of draining inside its budget"
 )
 raw.close()
+# And a page that announces a body and then goes quiet is refused rather than waited on: the drain
+# is under a timeout, or enough quiet pages hold every thread the server has (review of #37).
+saved_drain = server.DRAIN_TIMEOUT_SECONDS
+server.DRAIN_TIMEOUT_SECONDS = 0.2
+try:
+    quiet = socket.create_connection(("127.0.0.1", port), timeout=5)
+    quiet.sendall(
+        (
+            "POST /audio HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{port}\r\n"
+            "X-Sample-Rate: 44100\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n"
+        ).encode()
+    )
+    try:
+        answered = quiet.recv(200)
+    except socket.timeout:  # the worker is still holding on for a body that never came
+        answered = b""
+    assert b" 415 " in answered, (
+        "a page that sent no body held the thread that was refusing it"
+    )
+    quiet.close()
+finally:
+    server.DRAIN_TIMEOUT_SECONDS = saved_drain
 
 # Her voice, at the rate she was made at: the page configures its AudioContext from the header.
 headers, body = listen_once(
