@@ -1480,15 +1480,17 @@ for state in [*states, "dance", "actions"]:
     have = server.anims()
     assert any(have.get(state, {}) or have.get("idle", {})), f"no clip for the {state} pool"
 
-# Every key the page listens for is a key the page says it listens for. Nothing starts on load — a
-# browser refuses a microphone and a sound before a gesture — so a key nobody was told about is a
-# feature nobody finds, and a key pressed into an unfocused window reads as a broken page: the hint
-# says that too, in the first line. Read as UTF-8, both of them: the page's arrows are not characters
-# Windows' own encoding has.
+# The page still listens for its keys, and the two a hand has to press without a keyboard are buttons on
+# its row (checked below). What the keys are is README.md's table now, not a hint standing over her
+# boots: on 2026-11-28 Go asked for that line out, since a page whose foot is a row of buttons does not
+# need a sentence naming keys. Nothing starts on load — a browser refuses a microphone and a sound
+# before a gesture — and the two buttons are the gesture.
 page_html = (server.HERE / "face.html").read_text(encoding="utf-8")
-for key in re.findall(r"e\.key !== '([^']+)'", page):
-    assert f"<b>{key}</b>" in page_html, f"the page handles {key!r} and never says so"
-assert "click the page" in page_html
+readme = (server.HERE.parent / "README.md").read_text(encoding="utf-8")
+keys = re.findall(r"e\.key !== '([^']+)'", page)
+assert keys, "the page listens for no key at all"
+for key in keys:
+    assert f"| `{key}` |" in readme, f"the page handles {key!r} and no table says so"
 # The foot of the page is one stack in flow, whose height is measured rather than guessed. The status
 # line used to be placed by its own `bottom`, a number tuned for two buttons and a hint: the box that
 # typed lines added arrived underneath it and the line ended up behind the box's top border, reported
@@ -1502,11 +1504,18 @@ assert not re.search(r"#status\s*\{[^}]*\bbottom\s*:", page_html), (
 assert re.search(r"#subtitle\s*\{[^}]*bottom:\s*calc\(var\(--bottom-h", page_html), (
     "a caption lands on the keys instead of clearing them"
 )
-# And nothing she is drawn into goes under the controls: the canvas is the window less that stack, or
-# the text box sits over her boots with her feet cropped behind it. The frame is what she is fitted to,
-# so it is told the canvas's size rather than the window's.
+# And she is drawn into the whole window, with the foot of the page floating over her boots. The canvas
+# used to be the window less that stack, which drew her into a space that changed with every hint that
+# wrapped — and with the keyboard, which took a third of the height and drew her a third smaller for as
+# long as the box was open. Go asked for the full canvas on 2026-11-28.
 assert "function freeHeight()" in page and "renderer.setSize(innerWidth, freeHeight())" in page, (
-    "the canvas runs the whole height of the window, so the box covers her feet"
+    "the canvas is not the window, so the box pushes her feet up out of the way"
+)
+assert "tallHeight" in page and "innerHeight > tallHeight" in page, (
+    "the canvas follows the keyboard, so she shrinks while a line is typed on a phone"
+)
+assert "html:not(.app) #bottom" in page_html and "linear-gradient(transparent" in page_html, (
+    "the foot of the page floats over her boots with nothing to read it against"
 )
 assert re.search(r"createFraming\(camera[\s\S]{0,300}?window\.faceApp\?\.resize,[\s\S]{0,300}?viewport\)", page), (
     "she is fitted to the window rather than to the canvas the controls leave"
@@ -1520,16 +1529,16 @@ assert "innerHeight * (innerHeight > innerWidth" not in (server.HERE / "js" / "f
 assert "dispatchEvent(new Event('resize'))" in page_html, (
     "a stack of a different height never tells the canvas it changed"
 )
-# The app is the exception both ways: its window carries no controls, so the canvas is the whole of it,
-# and the one line the app has for a failure is not hidden along with them.
-assert "classList.contains('app')" in page, (
-    "the app's canvas is shortened by a stack it does not show"
+# The app and the page are the same in this now: her canvas is the whole window either way. It used to
+# be the window less the stack on a phone, which meant a hint that wrapped changed her size and the
+# keyboard changed it by a third while a line was typed. What is remembered instead is the tallest
+# window seen at this width (see above), so no keyboard can make her smaller.
+assert 'classList.contains(\'app\')' not in re.search(
+    r"function freeHeight\(\) \{.*?\n\}", page, re.S).group(0), (
+    "one of the two is still drawn into a smaller canvas than the other"
 )
-# And on a phone the stack's own place is the free area, not the window less a number: an Android
-# browser puts the fixed stack at the visual bottom while `innerHeight` reports the taller layout
-# viewport, so the arithmetic drew her a boot's width behind the text box, on the phone only.
-assert "stack.getBoundingClientRect().top" in page, (
-    "the canvas's height is arithmetic again, and a phone's viewport is not that arithmetic"
+assert "getBoundingClientRect().top" not in page, (
+    "the canvas's height is the stack's place again, which the keyboard moves"
 )
 assert not re.search(r"html\.app #bottom\s*\{[^}]*display:\s*none", page_html), (
     "the app's own error line is hidden with the controls"
@@ -1548,10 +1557,15 @@ for phrase in ("drawing her", "loading her animations", "can't draw her", "can't
 # A phone has no keyboard, and two things follow from that. It must not shrink the page to 980 pixels
 # and hold it there — reported from the phone on 2026-11-21 as "too small, I have to zoom in a lot".
 assert "width=device-width" in page_html, "a phone shrinks the page instead of fitting it"
-# And every key a phone must be able to press has to be tappable, through the same listener.
-for key in re.findall(r"e\.key !== '([^']+)'", page):
-    assert f'data-key="{key}"' in page_html, f"{key!r} is keyboard only, and a phone has no keyboard"
-assert "new KeyboardEvent('keydown'" in page, "the buttons do not reach the key listeners"
+# And every key a phone must be able to press has a button on the row: the microphone and the camera are
+# there as buttons rather than as stand-ins that press a key for it, because a press is the gesture the
+# browser asks for before either, and a button can say what it did (see #controls).
+for key, button in (("m", "talk"), ("c", "lens")):
+    assert f"e.key !== '{key}'" in page, f"the page stopped listening for {key!r}"
+    assert f'id="{button}"' in page_html, f"{key!r} is keyboard only, and a phone has no keyboard"
+assert "new KeyboardEvent('keydown'" not in page, (
+    "a button on the row still presses a key for the page instead of being the press itself"
+)
 # A phone has no keypad either, and a box to type in is the other half of that: the phone is the only
 # keyboard in the room, so a line typed on the page has to reach zrb as a turn the way a spoken one
 # does. The server frames and cuts it (typed.py); the page sends it to POST /text.
@@ -1609,15 +1623,122 @@ assert "if (her.framing.onPointerMove(e)) her.view.notice();" in page, (
     "a drag tells zrb the view it started at, not the one it ended on"
 )
 assert "touch-action: none" in page_html, "the browser takes the drag for a scroll of the page"
-# The camera's hint says what the press did. `c` hands the camera back on purpose — the grant is what
-# it is for — so a label that still reads "allow this camera" after it was allowed hides the answer.
-assert 'id="camera"' in page_html and 'getElementById(\'camera\')' in page, (
-    "the camera's hint never says the camera was allowed"
+# The camera is a switch on both, so a press says what it did: "camera on" once the names are published,
+# "camera off" after the second press. The page used to carry its own `c` button and its own sentence in
+# the hint; on 2026-11-28 Go asked for the same three buttons on the page as in the window.
+assert 'data-key' not in page_html and 'id="camera"' not in page_html, (
+    "the page still carries a second microphone and camera of its own"
 )
-# The advice line is for a page nobody has touched: it was still standing under a phone that was already
-# listening, saying "tap or click the page, then:" to someone who had.
-assert "firstKey.hidden = true" in page and ".first[hidden]" in page_html, (
-    "the page goes on telling a hand to tap a page that has been tapped"
+assert "lensLabel.textContent = error ? 'refused' : names.length ? 'camera on' : 'camera off'" in page, (
+    "the camera button says nothing a press can change"
+)
+# The box is a textarea: a long thought wraps instead of scrolling out of sight, and Enter still sends
+# it -- a textarea does not submit its form, so without the key handler the line would never leave.
+assert '<textarea id="typed"' in page_html and "#keys textarea" in page_html, (
+    "the page's box is a one-line field, so a long thought scrolls out of sight"
+)
+assert "event.key !== 'Enter' || event.shiftKey" in typed_js, (
+    "Enter in the page's textarea inserts a newline and never sends the line"
+)
+# And the hint is gone rather than hidden. It read "tap or click the page, then:" — advice for a page
+# nobody had touched, standing under a phone that had already pressed it, and on a page whose foot is a
+# row of buttons it is a line explaining what the buttons already say. Go asked for it out on
+# 2026-11-28. The box stays; nothing else is written along that edge.
+assert "tap or click" not in page_html and 'class="first"' not in page_html, (
+    "the page still tells a hand to tap a page it has already tapped"
+)
+assert ".keys-only" not in page_html and "firstKey" not in page, (
+    "the page still carries a row of key names under a foot that has no keys to name"
+)
+# The window keeps the row of keys out of sight, which leaves a window that shows a key nobody was told
+# about and gives a hand with no keyboard nothing to press. So the row it does show carries the three
+# things a hand needs without them -- what she is doing, the microphone, and the camera -- and they stay
+# in sight rather than waiting behind a `?`: a control that has to be found is a control that is not
+# there. Go asked for that on 2026-11-28, after pressing `m` blind for a morning.
+assert ('id="talk"' in page_html and 'id="voice"' in page_html and 'id="lens"' in page_html
+        and 'id="state"' in page_html), (
+    "the window offers neither what she is doing nor the camera, only a key it never showed"
+)
+assert 'id="help"' not in page_html and "#keys.shown" not in page_html, (
+    "the window still hides its own controls behind a `?`"
+)
+assert "stateLabel.textContent = statusText" in page, "the window's row never says what she is doing"
+assert 'id="buttons"' in page_html and re.search(
+    r"html\.app #controls\s*\{[^}]*flex-direction:\s*column", page_html), (
+    "the state and the buttons are on one line, where the state runs into the button being pressed"
+)
+assert re.search(r"#buttons\s*\{[^}]*flex-direction:\s*row", page_html), (
+    "the page's buttons are stacked rather than lying along its foot"
+)
+assert re.search(r"html\.app #buttons\s*\{[^}]*flex-direction:\s*column", page_html), (
+    "the window's buttons are a row rather than a stack beside her"
+)
+assert re.search(r"html\.app #controls\s*\{[^}]*align-items:\s*center", page_html), (
+    "the state is not centred over the buttons it describes"
+)
+assert re.search(r"html\.app #subtitle\.status\s*\{[^}]*display:\s*none", page_html), (
+    "the window says the state twice, under her and beside her feet"
+)
+assert "const hold = () => {" in page and "if (audio.listening) audio.stopMic();" in page, (
+    "the talk button does not hold the microphone open and close it again"
+)
+assert "talkButton.addEventListener('pointerup', letGo)" in page, (
+    "letting go of the talk button is not what stops the microphone"
+)
+assert "if (!audio.hearing) audio.startEars();" not in page, (
+    "the talk button turns her voice on, so a mute is undone by the next thing said into it"
+)
+assert "audio.hearing ? audio.stopEars() : audio.startEars()" in page, (
+    "her voice has no button of its own, so only the microphone's press can bring it back"
+)
+# The camera is a switch too: a grant that can only be given is a page zrb keeps asking for photos
+# after the hand that allowed it has changed its mind. Go pressed the camera button and found no way
+# back on 2026-11-28.
+assert "pageCamera.names.length ? pageCamera.release() : pageCamera.ask()" in page, (
+    "the camera button asks and never takes the names back"
+)
+camera = (server.HERE / "js" / "camera.js").read_text()
+assert "async function release()" in camera and "devices: []" in camera, (
+    "there is no way to tell the server this page is no longer a camera"
+)
+# And each button carries an icon beside its word, so the row is read before it is read.
+assert page_html.count('class="icon"') == 3 and "#controls .icon" in page_html, (
+    "the window's buttons are words only, in a row nobody can aim at without reading"
+)
+# The app passes every click through to whatever is behind the window, so a control in its corner needs
+# the answer her body gets: without it the press on the talk button is a press on the window behind her.
+assert "pointerenter" in desktop and "overControl" in desktop, (
+    "the app takes the mouse over her body only, so a button in its corner cannot be pressed"
+)
+assert "desktop.watch(" in page, "the controls never tell the app the cursor is on them"
+assert "const takes = e => over && e.button === 0;" in desktop, (
+    "a press on a control is answered as a press on her, and moves her window"
+)
+# Where the row sits is hers, not the window's: a corner of a see-through window is somebody else's
+# document, and the buttons were over the terminal's text until Go asked for them to be nearer her on
+# 2026-11-28. Her stance is measured rather than the prism the framing fits, so the row stays beside her
+# feet, and only the part of the window the display is showing counts.
+assert "function placeControls(force)" in page and "controlsRow.classList.add('placed')" in page, (
+    "the window's buttons are pinned to a corner of the window"
+)
+assert "STANCE_BONES" in page and "getNormalizedBoneNode(name)" in page, (
+    "the buttons are placed against a reach that is not where she stands"
+)
+# And it is put down rather than dragged along: Go said on 2026-11-28 that it moves too much. So it moves
+# only when she has drifted further than DRIFT, the side it is on is kept until the other side is clearly
+# roomier, and a move is eased rather than jumped (see `#controls.placed` in face.html).
+assert "const DRIFT = " in page and "const CROSS_ROOM = " in page and "placed.side === side" in page, (
+    "the row follows every sway, which slides it under the pointer trying to press it"
+)
+assert re.search(r"html\.app #controls\.placed\s*\{[^}]*transition:", page_html), (
+    "a move of the row is a jump rather than a step"
+)
+assert "placeControls(true); // the row is wider or narrower now" in page, (
+    "the row keeps the width it had when what she is doing changes under it"
+)
+assert "placeControls(); // beside her feet" in page, "the row is placed once and then left behind"
+assert re.search(r"html\.app #controls\.placed\s*\{[^}]*right:\s*auto", page_html), (
+    "the row is still laid out where the window would have put it"
 )
 
 # The line channel as the server keeps it: one message a line, a blank one refused, and what was
@@ -2530,6 +2651,21 @@ open_post = audio_js[audio_js.index("function openPost()"):audio_js.index("funct
 assert "if (!streamsBody()) return postEachBlock();" in open_post
 assert "duplex: 'half'" in open_post and "postEachBlock()" in open_post  # a start that failed goes on
 assert ".catch(() => {})" not in open_post  # a dead upload is not a silence to swallow
+
+# A release is a silence, not merely a request that stopped. zrb cuts an utterance on quiet blocks --
+# LLM_DICTATION_SILENCE, one second of them -- and the face server answers a quiet queue with one 20 ms
+# frame every fifteen seconds, so a page that just stopped posting left the utterance open until
+# `max_utterance` half a minute later: the press looked dead. Measured against zrb's own cutter, two
+# seconds of speech and then that ping is still an utterance in progress, and a second and a half of
+# silence ends it at once. So the page says the release in the one language the cutter reads.
+release = audio_js[audio_js.index("function releaseMic()"):audio_js.index("async function startMic()")]
+assert "const CLOSING = 1.5;" in audio_js, "the closing silence has no length"
+assert "postPcm?.(new Uint8Array(Math.round(RATE * CLOSING) * 2))" in release, (
+    "a released button stops posting without saying the utterance ended, so nothing is transcribed"
+)
+assert release.index("postPcm?.") < release.index("endPost?.()"), (
+    "the stream closes before the silence is in it"
+)
 
 # And chunked, which is what a page streaming its microphone sends: no length to give.
 _, body = listen_once(

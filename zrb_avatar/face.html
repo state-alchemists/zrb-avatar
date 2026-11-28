@@ -26,50 +26,92 @@
     display: flex; flex-direction: column; gap: 8px; padding: 0 10px 8px;
     pointer-events: none; /* her body is dragged by her; a tap on the page is the page's */
   }
+  /* On a page the stack floats over the canvas rather than sitting under it, so it carries its own
+     shade: a line of text over her boots is unreadable, and the page is drawn at the full height of
+     the window so a keyboard cannot shrink her (see js/main.js freeHeight). */
+  html:not(.app) #bottom { background: linear-gradient(transparent, rgba(10, 10, 16, .82) 42%); }
   #status { color: var(--glow); font: 12px monospace; text-align: center; opacity: .7; }
   html.app #status { display: none; }
   html.app #status.error { display: block; color: #f46; opacity: 1; }
-  /* What the keys do, said on the page they work on. Nothing here starts on load — a browser gives
-     neither a microphone nor a sound before a gesture — so the first line is the one that matters: a
-     key pressed into a window that never had focus does nothing, and that reads as a broken page.
-     Hidden in the app, where the window is her body rather than a manual and the table is README.md's. */
-  #keys {
-    max-width: 46%;
-    color: #8fa8c4; font: 11px/1.6 monospace; opacity: .55; pointer-events: none;
+  /* Typing, and nothing else: the page's box. The hint that named the keys is gone from this page — the
+     row of buttons is the manual now, and README.md holds the table (Go, 2026-11-28) — so the foot is a
+     place to type rather than a place to read. Hidden in the app, where the window is her body and has
+     no box. */
+  #keys { pointer-events: none; }
+  /* Typing: a phone's keyboard is the only one in the room, so the page carries a box. A textarea
+     rather than a one-line field, because a long thought then wraps instead of scrolling out of sight
+     one letter at a time, and it grows with what is in it up to six lines. Enter sends the line, and it
+     becomes a turn as typing into the terminal does; Shift+Enter is the newline. */
+  #keys form { display: flex; gap: 6px; }
+  #keys textarea {
+    pointer-events: auto; flex: 1 1 auto; min-width: 0; resize: none;
+    field-sizing: content; max-height: 6em; overflow-y: auto; line-height: 1.4;
+    font: 13px/1.4 monospace; color: #eaf6ff; background: rgba(60, 200, 255, .08);
+    border: 1px solid rgba(60, 200, 255, .35); border-radius: 14px; padding: 4px 10px;
+    outline: none; /* its own focus ring would be a second colour on a page that has a glow */
   }
-  #keys b { color: var(--glow); font-weight: 600; }
-  #keys .first { display: block; color: #ffd76a; }
-  /* The line above is advice for a page nobody has touched; js/main.js hides it once the ears are on. */
-  #keys .first[hidden] { display: none; }
-  /* Two of the entries are buttons: a phone has no keyboard to press, and a tap is both the gesture a
-     browser wants before a microphone and the only way in. The rest need keys a phone does not have. */
-  #keys button {
-    pointer-events: auto; cursor: pointer; font: inherit; color: inherit;
-    background: rgba(60, 200, 255, .10); border: 1px solid rgba(60, 200, 255, .35);
-    border-radius: 99px; padding: 1px 8px;
-  }
-  #keys button:active { background: rgba(60, 200, 255, .30); }
-  /* Typing: a phone's keyboard is the only one in the room, so the page carries a text box beside
-     the two buttons. Enter sends the line, and it becomes a turn as typing into the terminal does. */
-  #keys form { display: flex; gap: 6px; margin-bottom: 6px; }
-  #keys input {
-    pointer-events: auto; flex: 1 1 auto; min-width: 0;
-    font: inherit; color: #eaf6ff; background: rgba(60, 200, 255, .08);
-    border: 1px solid rgba(60, 200, 255, .35); border-radius: 99px; padding: 3px 10px;
-    outline: none;
-  }
-  #keys input::placeholder { color: #7d94ad; }
-  #keys input:focus { border-color: var(--glow); background: rgba(60, 200, 255, .16); }
-  /* A phone has no keyboard, and a hint that names keys it does not have is a column of text over her
-     feet: the two buttons stay, and the stack gives the line room of its own above the status line. */
+  #keys textarea::placeholder { color: #7d94ad; }
+  #keys textarea:focus { border-color: var(--glow); background: rgba(60, 200, 255, .16); }
+  /* A phone's box is a thumb's target rather than a mouse's. */
   @media (max-width: 640px) {
-    #keys { max-width: none; font-size: 13px; opacity: .85; }
-    #keys .keys-only { display: none; }
-    #keys button { padding: 7px 12px; font-size: 13px; }
-    #keys form { margin-bottom: 8px; }
-    #keys input { padding: 8px 12px; font-size: 14px; }
+    #keys textarea { padding: 8px 12px; font-size: 14px; }
   }
   html.app #keys { display: none; }
+  /* The foot of the window: the app hides the manual, so the row carries the three things a hand needs
+     without it -- what she is doing, the microphone, and the camera -- and they stay in sight rather
+     than waiting to be asked for. A page says those two on its status line and in its own keys, and
+     hides them here.
+     The window has no corner of its own -- a corner of a see-through window is somebody else's
+     document -- so js/main.js places the row against the model's own feet, on the side of it that is
+     on the screen. Until it has loaded, and when there is no place to put it, it sits here. */
+  #controls { display: flex; gap: 6px; align-items: center; pointer-events: none; }
+  /* In the window the three are one under the other; on a page they lie along the foot in a row, the
+     way a phone's own bar does. The same three either way: the page has no separate `m` and `c`
+     buttons in its hint any more. */
+  #buttons { display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; }
+  html.app #buttons { flex-direction: column; flex-wrap: nowrap; gap: 4px; align-items: stretch; }
+  html.app #controls {
+    position: fixed; left: 0; right: 0; bottom: 44px;
+    flex-direction: column; align-items: center; gap: 2px;
+  }
+  /* Put down once, then left where it was: the row follows her only when she has really moved, and a
+     step is eased so the buttons are never seen to jump. js/main.js decides both. The state has a line
+     of its own over the buttons, centred on them, so a change of state moves nothing you can press. */
+  html.app #controls.placed {
+    right: auto; bottom: auto; justify-content: flex-start;
+    transition: left .18s ease-out, top .18s ease-out;
+  }
+  /* Dark enough to read over whatever the window happens to float on: the old cyan fill turned to
+     pale blue over a white page, and her name on it was near invisible. What is on wears her own glow
+     as its edge, in whatever colour she is just now. */
+  #controls button {
+    pointer-events: auto; cursor: pointer; font: 11px/1.6 monospace; color: #c9d6e4;
+    background: rgba(9, 11, 18, .74); border: 1px solid rgba(143, 168, 196, .38);
+    border-radius: 99px; padding: 2px 10px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  /* An icon beside the word, so the row is read before it is read: a microphone, a speaker, a camera.
+     Decorative -- the button's own label is what a screen reader says. */
+  #controls .icon { font-size: 13px; line-height: 1; }
+  #controls button:hover { border-color: rgba(143, 168, 196, .72); }
+  #controls button:active, #controls button.on {
+    color: #eaf6ff; border-color: var(--glow); background: rgba(9, 11, 18, .9);
+  }
+  /* What she is doing, beside the buttons rather than under her: a page says it on the status line it
+     already has, and a window has no status line. It carries its own dark backdrop, because it floats
+     over whatever the window does -- a white page left the old amber on white all but invisible -- and
+     her glow is the dot that says whose note it is. Empty between turns, and takes no room then. */
+  #state {
+    color: #eaf6ff; font: italic 600 11px/1.6 monospace; white-space: nowrap;
+    background: rgba(9, 11, 18, .74); border-radius: 99px; padding: 1px 10px;
+    max-width: 15em; overflow: hidden; text-overflow: ellipsis;
+  }
+  #state::before { content: '•'; color: var(--glow); margin-right: 6px; }
+  /* Out of the flow, so what she is doing can grow or shrink without moving a button: the block is
+     always as wide and as tall as the buttons alone. */
+  html.app #state { position: absolute; left: 50%; bottom: 100%; margin-bottom: 2px; transform: translateX(-50%); }
+  #state:empty { display: none; }
+  html:not(.app) #state { display: none; } /* a page says it on the status line it already has */
   /* What she is saying: under her, over the status line, gone when the voice stops. The client
      sends a clear as the audio is read, ahead of the ear, so the line is ended by the mouth
      rather than by the clear — see js/main.js speechEnded. */
@@ -88,6 +130,8 @@
     color: #ffd76a; font-style: italic; font-weight: 600;
     background: rgba(9, 11, 18, .62);
   }
+  /* In the window the state is said once, in the row of buttons beside the model's feet (see #state). */
+  html.app #subtitle.status { display: none; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -102,22 +146,25 @@
 <div id="subtitle"></div>
 <div id="bottom">
   <div id="status">loading…</div>
-  <!-- The keys, on the page they work on. The first line is the one that matters: a browser starts
-       neither a microphone nor a sound before a gesture, so a page that has never been clicked swallows
-       every key and looks broken. The `m` entry is rewritten by js/main.js as the microphone comes and
-       goes, so the word there is always what that press will do next. -->
+  <!-- The typing box, on the page it works on: a phone's keyboard is how a line reaches zrb with no
+       terminal in reach. There is no hint naming keys here any more — the row of buttons below is the
+       manual, and a page nobody can press is not fixed by telling it what to press. -->
   <div id="keys">
     <form id="say" autocomplete="off">
-      <input id="typed" type="text" name="message" placeholder="type a line…" aria-label="a line to send"
-             enterkeyhint="send" autocapitalize="sentences" autocorrect="off" autocomplete="off">
+      <textarea id="typed" name="message" rows="1" placeholder="type a line…" aria-label="a line to send"
+                enterkeyhint="send" autocapitalize="sentences" autocorrect="off" autocomplete="off"></textarea>
     </form>
-    <span class="first">tap or click the page, then:</span>
-    <button type="button" data-key="m"><b>m</b> <span id="mic">talk and listen</span></button>
-    <button type="button" data-key="c"><b>c</b> <span id="camera">allow this camera</span></button><span class="keys-only"> ·
-    <b>← → ↑ ↓</b> look around ·
-    <b>shift+↑↓</b> face or feet ·
-    <b>+ -</b> zoom ·
-    <b>0</b> reset</span>
+  </div>
+  <!-- A press and a release, not a switch: a page that is zrb's ears hears only what was said on
+       purpose. Her state and the three buttons are the window's too; on a page they lie in a row and
+       the state is the status line above them. -->
+  <div id="controls">
+    <span id="state"></span>
+    <span id="buttons">
+      <button type="button" id="talk" aria-label="hold to talk"><span class="icon" aria-hidden="true">🎤</span><span id="talk-label">hold to talk</span></button>
+      <button type="button" id="voice" aria-label="her voice"><span class="icon" aria-hidden="true">🔇</span><span id="voice-label">voice off</span></button>
+      <button type="button" id="lens" aria-label="this page's camera"><span class="icon" aria-hidden="true">📷</span><span id="lens-label">camera off</span></button>
+    </span>
   </div>
 </div>
 <script>
@@ -127,8 +174,9 @@
   const bottom = document.getElementById('bottom');
   const measureBottom = () => {
     document.documentElement.style.setProperty('--bottom-h', `${bottom.offsetHeight}px`);
-    // And the canvas follows it: she is drawn into the space the controls leave (js/main.js), so a
-    // stack that changed height — a wider hint, a narrower phone — is a canvas that changed with it.
+    // The canvas no longer follows it: she is drawn at the full height of the window and the stack
+    // floats over her boots (js/main.js freeHeight), so a keyboard that shrinks the window must not
+    // shrink her. The caption and the row are placed from this number instead.
     dispatchEvent(new Event('resize'));
   };
   if (window.ResizeObserver) new ResizeObserver(measureBottom).observe(bottom);

@@ -3,8 +3,9 @@
 // A phone's keyboard is the only one in the room, so this is how a hand without a terminal types.
 // The line goes to POST /text, the face server hands it to zrb in the order it was typed, and it
 // becomes a turn the way a typed line in the terminal does — nothing about a typed message is
-// different for having come from a page. One line is one message: the input holds one, Enter sends
-// it, and the field is empty again for the next thought.
+// different for having come from a page. One line is one message: the box holds one, Enter sends it,
+// and the field is empty again for the next thought. It is a textarea, so a long thought wraps
+// instead of scrolling out of sight; Shift+Enter is the newline it would otherwise never give.
 
 // The server's own cap (typed.MAX_LINE_CHARS), kept here too so a paste is cut in the field rather
 // than refused after it was sent.
@@ -52,6 +53,14 @@ export function createTyped(form, input, { onError } = {}) {
   }
 
   form.addEventListener('submit', event => {
+    event.preventDefault();
+    send();
+  });
+  // A textarea does not submit on Enter — it would give a newline — so the send is said here or it is
+  // never said at all. Shift+Enter keeps the newline, and a composition is left alone: the Enter that
+  // ends a Japanese or Chinese input is not a press to send.
+  input.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
     event.preventDefault();
     send();
   });

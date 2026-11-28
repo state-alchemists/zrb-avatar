@@ -123,6 +123,13 @@ const BLOCK = 0.1;
 // has started. A tenth of a second absorbs a jittery connection without being heard as a delay; past
 // half a second what is waiting is late enough to give up.
 const TARGET = 0.1, LATE = 0.5;
+// Seconds of silence sent as the microphone closes. A pressed button ends an utterance that a held
+// button started, and zrb's cutter only knows that from quiet blocks: it needs a second of them
+// (LLM_DICTATION_SILENCE), while a page that simply stops posting offers the server's own ping — one
+// 20 ms frame every fifteen seconds — so the utterance would close on `max_utterance` half a minute
+// later, or after two and a half minutes of pings. So the release is said as silence, which is what a
+// microphone on this machine would have handed over.
+const CLOSING = 1.5;
 // Seconds the ring holds. Well past LATE, because a block zrb's player hands over whole is never cut
 // for being long: a second of it is a second of her, and dropping its start loses words.
 const RING = 4;
@@ -264,10 +271,16 @@ export function createAudio({ onState } = {}) {
   // block could still arrive at a controller that had closed, and 'off' has to mean nothing is
   // captured.
   function releaseMic() {
+    // A graph that was running, as against a start that failed before it made one: only the first has
+    // speech behind it to close.
+    const wasListening = !!micNode;
     micNode?.port.close();
     micStream?.getTracks().forEach(track => track.stop());
     micContext?.close().catch(() => {});
     micNode = micContext = micStream = null;
+    // The release, said in the one language the cutter understands (see CLOSING): 16-bit mono, so two
+    // bytes a sample, and every one of them zero.
+    if (wasListening) postPcm?.(new Uint8Array(Math.round(RATE * CLOSING) * 2));
     endPost?.();
     postPcm = endPost = null;
   }

@@ -179,10 +179,28 @@ export function createCamera({ onState, page = '' } = {}) {
     await publish();
   }
 
+  // Off: the names go back, so zrb stops asking this page for photos. Nothing is left running -- a
+  // photo opens a camera for its one picture and closes it again -- so what is switched off is the
+  // permission to be asked, which is all this page holds between photos.
+  async function release() {
+    names = [];
+    error = '';
+    changed();
+    try {
+      await fetch(`frame/devices?page=${encodeURIComponent(page)}`, {
+        method: 'POST',
+        body: JSON.stringify({ devices: [] }),
+      });
+    } catch {
+      // The server is going away; the names it kept go with it.
+    }
+  }
+
   return {
     get names() { return [...names]; }, // what this page told zrb it has
     get error() { return error; }, // the last refusal, in words, until the next attempt clears it
     ask,
+    release,
     publish,
     answer,
   };

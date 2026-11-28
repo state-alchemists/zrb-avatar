@@ -402,17 +402,27 @@ do not commit or share them.
 ### Using it
 
 - **Move**: drag her. **Close**: Alt+F4 on Windows, Cmd+Q on macOS.
+- **Talk**: hold the talk button. On a page it is along the foot with the rest; in the window it is
+  placed beside her feet, on the side of her that is on the screen, and it moves only when she has
+  moved far enough to matter. The microphone is open while it is held and shut when it is let go.
+  Her voice has its own button beside it: the first press is the gesture a browser wants before any
+  sound at all, and it then stays on until you turn it off — holding the talk button never turns it
+  back on, so a muted window stays muted. The window also always shows what she is doing, and a
+  button for the camera.
 - **Keys**: click the window first, then press — a browser gives no microphone and makes no sound
   until the page has been touched, and a key pressed into a window that never had focus is not
   heard at all. The page lists these keys along its bottom edge. The camera's angle is remembered.
-- **Clicks** go through the see-through window to whatever is behind it, except on her (Windows and
-  macOS). Linux cannot pass the mouse through, so the whole window takes clicks there.
+- **Clicks** go through the see-through window to whatever is behind it, except on her and on its own
+  controls (Windows and macOS). Linux cannot pass the mouse through, so the whole window takes clicks
+  there.
 
 | Key | What it does |
 | --- | --- |
 | `m` | Microphone and speaker at once: zrb hears this device, and her voice comes out of it. Again turns both off. |
-| `c` | Allow this page's camera, so zrb can ask for a photo by name (`/photo phone-back`, `zrb-avatar frame`). The hint then reads how many cameras it found: the press is a grant, not a stream. |
-| *type* | The box along the bottom edge: a line typed there is a message to zrb, sent with Enter, and it arrives as a turn. It is how a phone talks to her with no terminal in reach. |
+| *hold* | The talk button: the microphone, for as long as it is held. Her voice is not touched by it. On a page it lies along the foot with the other two, in the window they are stacked beside her feet. |
+| *voice* | The button beside it: her voice on or off. The press is the gesture a browser wants before any sound at all; after that it stays on until you turn it off, or until the page is reloaded. |
+| `c` | Allow this page's camera, so zrb can ask for a photo by name (`/photo phone-back`, `zrb-avatar frame`). The hint then reads how many cameras it found: the press is a grant, not a stream. It is also the camera button, on the page and in the window, and a second press there takes the names back. |
+| *type* | A page's box along its bottom edge: a line typed there is a message to zrb, sent with Enter, and it arrives as a turn. It is a textarea, so a long thought wraps; Shift+Enter is a newline. It is how a phone talks to her with no terminal in reach. |
 | ← → | Orbit around her. |
 | ↑ ↓ | Orbit over her head or under her feet, all the way round. |
 | Shift+↑ / Shift+↓ | Move the camera's focus up or down her body (to her face, say). |
