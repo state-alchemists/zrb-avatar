@@ -519,24 +519,26 @@ async def _sense_loop(turns: asyncio.Queue, watcher: LastInput | None) -> None:
         else None
     )
     next_model = next_presence = time.monotonic()
-    said_voice = None  # nothing told yet: the first tick tells the pages where zrb's voice is
     while True:
         await asyncio.sleep(1)
         now = time.monotonic()
-        # `remote` is what only zrb knows, and `/set` can change it while this loop runs. Saying it
-        # again on every change is what lets a page stop offering a microphone nothing reads, or
-        # start, without a restart. The name travels with it because the row of switches is the one
-        # place the page writes about her rather than hears from her -- "Tara can't hear you" -- and
-        # a page has no way to learn what zrb calls itself. `LLM_ASSISTANT_NAME` is under `/set` too,
-        # so it is compared with the rest rather than said once.
-        voice = {
-            "type": "voice",
-            "remote": voice_is_here(),
-            "name": str(CFG.LLM_ASSISTANT_NAME or ""),
-        }
-        if voice != said_voice:
-            said_voice = voice
-            await asyncio.to_thread(send, voice)
+        # `remote` is what only zrb knows, and `/set` can change it while this loop runs; saying it
+        # again is what lets a page stop offering a microphone nothing reads, or start, without a
+        # restart. Said on every tick rather than on every change: a send that failed -- the server
+        # restarting, or not up yet, which this loop cannot see -- would otherwise leave every page
+        # that connects afterwards holding the defaults for good. The server tells a page only when
+        # the state changed, so saying it again costs one request and never a redraw. The name
+        # travels with it because the row of switches is the one place the page writes about her
+        # rather than hears from her -- "Tara can't hear you" -- and a page has no other way to learn
+        # what zrb calls itself; `LLM_ASSISTANT_NAME` is under `/set` too.
+        await asyncio.to_thread(
+            send,
+            {
+                "type": "voice",
+                "remote": voice_is_here(),
+                "name": str(CFG.LLM_ASSISTANT_NAME or ""),
+            },
+        )
         view = await asyncio.to_thread(ask, "view")
         if view and view.get("n") != seen:
             seen = view.get("n")

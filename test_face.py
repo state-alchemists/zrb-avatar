@@ -1795,8 +1795,8 @@ assert "zrb.llm.util.face_server import get_remote_url" in tools, (
 assert '"remote": voice_is_here(),' in tools and (
     '"name": str(CFG.LLM_ASSISTANT_NAME or ""),' in tools
 ), "the plugin never tells the page that zrb's voice moved, or what zrb calls itself"
-assert "said_voice = None" in tools and "if voice != said_voice:" in tools, (
-    "the voice is read once rather than followed, so `/set` leaves the page stale"
+assert "said_voice" not in tools and '"remote": voice_is_here(),' in tools, (
+    "the voice is said once, so a send that failed -- the server restarting -- never reaches a page"
 )
 server_py = (server.HERE / "server.py").read_text()
 assert "def voice_state() -> dict:" in server_py and 'event.get("type") == "voice"' in server_py, (
